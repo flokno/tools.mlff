@@ -1,0 +1,125 @@
+#! /usr/bin/env python3
+
+from pathlib import Path
+from typing import List
+
+import jax.numpy as jnp
+import numpy as np
+import typer
+import xarray as xr
+from ase.io import read
+from ase.units import GPa
+from jax import jit
+from mlff.mdx import AtomsX, CalculatorX, MLFFPotential
+from rich import print as echo
+from rich.progress import track
+from tdeptools.cli.tdep_parse_output import dimensions, keys, write_infiles, write_meta
+
+app = typer.Typer(pretty_exceptions_show_locals=False)
+
+
+@app.command()
+def main(
+    files: List[Path],
+    folder_model: str = "module",
+    outfile: str = "predictions.nc",
+    update: bool = typer.Option(False, help="Update positions (faster, less safe)"),
+    skin: float = 1.0,
+    capacity_multiplier: float = 1.25,
+    tdep: bool = False,
+    format: str = "aims",
+):
+    """Convert trajectory files to MLFF input as npz file"""
+    echo(files)
+
+    # read first file and create atoms
+    atoms = read(files[0], format=format)
+    echo(f"... System: {atoms}")
+
+    atomsx = AtomsX.create(atoms=atoms, dtype=jnp.float64)
+
+    potential = MLFFPotential.create_from_ckpt_dir(
+        folder_model, add_shift=True, dtype=jnp.float64
+    )
+    calcx = CalculatorX.create(
+        potential=potential, implemented_properties=("energy", "forces", "stress")
+    )
+
+    kw_partitioning = {
+        "cutoff": potential.cutoff,
+        "skin": skin,
+        "capacity_multiplier": capacity_multiplier,
+    }
+
+    atomsx = atomsx.init_spatial_partitioning(**kw_partitioning)
+
+    # predict
+    n_atoms = len(atoms)
+    n_samples = len(files)
+
+    rows = []
+    for ii, file in enumerate(track(files)):
+        atoms = read(file, format=format)
+
+        if update:
+            watomsx = atomsx.update_cell(atomsx.cell)
+            watomsx = atomsx.update_positions(atoms.positions, update_neighbors=True)
+            wcalcx = jit(calcx)
+        else:
+            watomsx = AtomsX.create(atoms=atoms, dtype=jnp.float64)
+            watomsx = watomsx.init_spatial_partitioning(**kw_partitioning)
+            wcalcx = calcx
+
+        predictions = wcalcx(watomsx)
+
+        s = predictions["stress"] / atoms.get_volume()
+        if tdep:
+            s /= GPa  # TDEP wants GPa
+            _stress = np.array([s[0, 0], s[1, 1], s[2, 2], s[2, 1], s[2, 0], s[1, 0]])
+            _pressure = np.mean(_stress[:3])
+        else:
+            _stress = s
+            _pressure = np.trace(s).mean()
+
+        row = {
+            keys.cell: np.asarray(atoms.cell),
+            keys.natoms: len(atoms),
+            keys.volume: atoms.get_volume(),
+            keys.positions_cartesian: atoms.positions,
+            keys.positions: atoms.get_scaled_positions(),
+            keys.forces: predictions["forces"],
+            keys.energy_total: predictions["energy"],
+            keys.energy_kinetic: 0.0,
+            keys.energy_potential: predictions["energy"],
+            keys.temperature: 0.0,
+            keys.stress: _stress,
+            keys.pressure: _pressure,
+        }
+
+        rows.append(row)
+
+    if tdep:
+        write_infiles(rows)
+        write_meta(n_atoms=n_atoms, n_samples=n_samples)
+    else:
+        # rewrite data as DataArrays
+        _keys = rows[0].keys()
+
+        arrays = {}
+        for k in _keys:
+            array = np.concatenate([[row[k] for row in rows]], axis=0)
+            dims = ["time"]
+            if k in dimensions:
+                dims.extend(dimensions[k])
+            arrays[k] = xr.DataArray(array, name=k, dims=dims)
+
+        ds = xr.Dataset(arrays)
+
+        echo(ds)
+
+        echo(f"... save data to {outfile}")
+        ds.to_netcdf(outfile)
+
+
+if __name__ == "__main__":
+    app()

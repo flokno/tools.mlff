@@ -1,0 +1,72 @@
+#! /usr/bin/env python3
+
+from pathlib import Path
+from typing import List
+import json
+
+from ase import Atoms
+import numpy as np
+import typer
+import xarray as xr
+from rich import print as echo
+
+app = typer.Typer(pretty_exceptions_show_locals=False)
+
+
+@app.command()
+def main(
+    files: List[Path],
+    outfile: Path = "mlff_data.npz",
+):
+    """Convert trajectory files to MLFF input as npz file"""
+    echo(files)
+
+    # empty files
+    _stress = []
+    _z = []
+    _pbc = []
+    _E = []
+    _F = []
+    _R = []
+    _velocity = []
+    _unit_cell = []
+
+    for file in files:
+        with xr.open_dataset(file) as ds:
+            atoms = Atoms(**json.loads(ds.atoms_reference))
+            nsteps = len(ds.positions)
+            _stress.append(ds.stress.data * atoms.get_volume())
+            _z.append(np.tile(atoms.numbers, [nsteps, 1]))
+            _pbc.append(np.tile(atoms.pbc, [nsteps, 1]))
+            _E.append(ds.energy_potential.data)
+            _F.append(ds.forces.data)
+            _R.append(ds.positions.data)
+            _velocity.append(ds.velocities.data)
+            _unit_cell.append(ds.cell.data)
+
+    _stress = np.concatenate(_stress)
+    _z = np.concatenate(_z)
+    _pbc = np.concatenate(_pbc)
+    _E = np.concatenate(_E).reshape([-1, 1])
+    _F = np.concatenate(_F)
+    _R = np.concatenate(_R)
+    _velocity = np.concatenate(_velocity)
+    _unit_cell = np.concatenate(_unit_cell)
+
+    # prepate data
+    data = {
+        "z": _z,
+        "R": _R,
+        "E": _E,
+        "F": _F,
+        "stress": _stress,
+        "pbc": _pbc,
+        "unit_cell": _unit_cell,
+    }
+
+    echo(f"... dump {len(_z)} samples to {outfile}")
+    np.savez(outfile, **data)
+
+
+if __name__ == "__main__":
+    app()
