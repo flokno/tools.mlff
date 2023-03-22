@@ -9,8 +9,10 @@ import typer
 import xarray as xr
 from ase.io import read
 from ase.units import GPa
+from glp import atoms_to_system
+from glp.calculators import supercell
 from jax import jit
-from mlff.mdx import AtomsX, CalculatorX, MLFFPotential
+from mlff.mdx import MLFFPotential
 from rich import print as echo
 from rich.progress import track
 from tdeptools.cli.tdep_parse_output import dimensions, keys, write_infiles, write_meta
@@ -23,9 +25,7 @@ def main(
     files: List[Path],
     folder_model: str = "module",
     outfile: str = "predictions.nc",
-    update: bool = typer.Option(False, help="Update positions (faster, less safe)"),
     skin: float = 1.0,
-    capacity_multiplier: float = 1.25,
     tdep: bool = False,
     format: str = "aims",
 ):
@@ -36,22 +36,14 @@ def main(
     atoms = read(files[0], format=format)
     echo(f"... System: {atoms}")
 
-    atomsx = AtomsX.create(atoms=atoms, dtype=jnp.float64)
-
     potential = MLFFPotential.create_from_ckpt_dir(
         folder_model, add_shift=True, dtype=jnp.float64
     )
-    calcx = CalculatorX.create(
-        potential=potential, implemented_properties=("energy", "forces", "stress")
+
+    calculator, state = supercell.calculator(
+        potential, atoms_to_system(atoms), n_replicas=1, skin=skin
     )
-
-    kw_partitioning = {
-        "cutoff": potential.cutoff,
-        "skin": skin,
-        "capacity_multiplier": capacity_multiplier,
-    }
-
-    atomsx = atomsx.init_spatial_partitioning(**kw_partitioning)
+    calculate = jit(calculator.calculate)
 
     # predict
     n_atoms = len(atoms)
@@ -61,16 +53,7 @@ def main(
     for ii, file in enumerate(track(files)):
         atoms = read(file, format=format)
 
-        if update:
-            watomsx = atomsx.update_cell(atomsx.cell)
-            watomsx = atomsx.update_positions(atoms.positions, update_neighbors=True)
-            wcalcx = jit(calcx)
-        else:
-            watomsx = AtomsX.create(atoms=atoms, dtype=jnp.float64)
-            watomsx = watomsx.init_spatial_partitioning(**kw_partitioning)
-            wcalcx = calcx
-
-        predictions = wcalcx(watomsx)
+        predictions, state = calculate(atoms_to_system(atoms), state)
 
         s = predictions["stress"] / atoms.get_volume()
         if tdep:
