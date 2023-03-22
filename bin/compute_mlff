@@ -54,6 +54,7 @@ def main(
         atoms = read(file, format=format)
 
         predictions, state = calculate(atoms_to_system(atoms), state)
+        assert not state.overflow, "FIXME"
 
         s = predictions["stress"] / atoms.get_volume()
         if tdep:

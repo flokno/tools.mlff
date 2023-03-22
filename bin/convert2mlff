@@ -17,6 +17,7 @@ app = typer.Typer(pretty_exceptions_show_locals=False)
 def main(
     files: List[Path],
     outfile: Path = "mlff_data.npz",
+    dropna: bool = False,
 ):
     """Convert trajectory files to MLFF input as npz file"""
     echo(files)
@@ -33,16 +34,23 @@ def main(
 
     for file in files:
         with xr.open_dataset(file) as ds:
+
+            if dropna:
+                mask = np.isfinite(ds.stress.data[:, 0, 0])
+            else:
+                mask = np.isfinite(ds.positions.data[:, 0, 0])
+
             atoms = Atoms(**json.loads(ds.atoms_reference))
-            nsteps = len(ds.positions)
-            _stress.append(ds.stress.data * atoms.get_volume())
+            nsteps = len(ds.positions[mask])
+
+            _stress.append(ds.stress.data[mask] * atoms.get_volume())
             _z.append(np.tile(atoms.numbers, [nsteps, 1]))
             _pbc.append(np.tile(atoms.pbc, [nsteps, 1]))
-            _E.append(ds.energy_potential.data)
-            _F.append(ds.forces.data)
-            _R.append(ds.positions.data)
-            _velocity.append(ds.velocities.data)
-            _unit_cell.append(ds.cell.data)
+            _E.append(ds.energy_potential.data[mask])
+            _F.append(ds.forces.data[mask])
+            _R.append(ds.positions.data[mask])
+            _velocity.append(ds.velocities.data[mask])
+            _unit_cell.append(ds.cell.data[mask])
 
     _stress = np.concatenate(_stress)
     _z = np.concatenate(_z)
