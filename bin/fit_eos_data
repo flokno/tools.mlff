@@ -1,0 +1,72 @@
+#! /usr/bin/env python3
+import json
+from pathlib import Path
+
+import pandas as pd
+from ase.eos import EquationOfState
+from ase.units import GPa
+import numpy as np
+from scipy import interpolate as si
+from matplotlib import pyplot as plt
+from rich import print as echo
+import typer
+
+app = typer.Typer(pretty_exceptions_show_locals=False)
+
+
+@app.command()
+def main(
+    file: Path,
+    outfile: Path = None,
+    eos: str = "vinet",
+    plot: bool = False,
+    kind: str = "quadratic",
+):
+    """fit Vinet EOS to volume/energy data and write fit parameters to file"""
+    df = pd.read_csv(file, comment="#")
+    x = df.volume / df.N
+    y = df.energy / df.N
+    p = df.pressure / GPa
+    obj = EquationOfState(volumes=x, energies=y, eos=eos)
+    obj.fit()
+    args = obj.eos_parameters
+    E0, B0, BP, V0 = args
+    kwargs = {"E0": E0, "B0": B0, "BP": BP, "V0": V0}
+
+    echo(f"Results from fitting to {eos} equation of states:")
+    echo(json.dumps(kwargs, indent=1))
+
+    if not outfile:
+        outfile = file.stem + ".json"
+    echo(f"... write  to {outfile}")
+    json.dump(kwargs, open(outfile, "w"), indent=1)
+
+    if plot:
+        fig, ax = plt.subplots()
+        # plot interpolated pressure
+        f_p = si.interp1d(x, p, kind=kind)
+        # ax = df.plot(x="volume", y="pressure", style="*")
+        ax.plot(x, y, marker="*", color="k")
+        # df.plot(x="volume", y="energy", style="*", ax=ax, color="k")
+        tax = ax.twinx()
+        tax.plot(x, p, marker=".", color="C3")
+        # df.plot(x="volume", y="pressure", style=".", ax=tax, color="C3")
+        _x = np.linspace(x.min(), x.max(), num=1000)
+        tax.plot(_x, f_p(_x), label="interpolation", zorder=0, color="C3")
+        tax.axhline(0, c="k", lw=1)
+
+        ax.plot(_x, obj.func(_x, *args), color="k")
+
+        ax.legend(["Energy", "Fit"])
+        tax.legend(["Pressure", "Fit"])
+
+        ax.set_ylabel("Energy (eV)")
+        tax.set_ylabel("Pressure (GPa)")
+
+        outfile = file.stem + ".pdf"
+        echo(f"... save plot to {outfile}")
+        fig.savefig(outfile)
+
+
+if __name__ == "__main__":
+    app()
