@@ -63,7 +63,7 @@ def main(
             _pressure = np.mean(_stress[:3])
         else:
             _stress = s
-            _pressure = np.trace(s).mean()
+            _pressure = -np.trace(s) / 3
 
         row = {
             keys.cell: np.asarray(atoms.cell),
