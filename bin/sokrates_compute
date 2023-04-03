@@ -3,19 +3,18 @@
 from pathlib import Path
 from typing import List
 
-import jax.numpy as jnp
 import numpy as np
 import typer
-import xarray as xr
 from ase.io import read
 from ase.units import GPa
-from glp import atoms_to_system
-from glp.calculators import supercell
-from jax import jit
-from mlff.mdx import MLFFPotential
 from rich import print as echo
 from rich.progress import track
-from tdeptools.cli.tdep_parse_output import dimensions, keys, write_infiles, write_meta
+from tdeptools.scripts.tdep_parse_output import (
+    dimensions,
+    keys,
+    write_infiles,
+    write_meta,
+)
 
 app = typer.Typer(pretty_exceptions_show_locals=False)
 
@@ -30,10 +29,32 @@ def main(
     format: str = "aims",
 ):
     """Convert trajectory files to MLFF input as npz file"""
+    import jax.numpy as jnp
+    import xarray as xr
+    from glp import atoms_to_system
+    from glp.calculators import supercell
+    from jax import jit
+    from mlff.mdx import MLFFPotential
+
+    echo(f"Compute so3krates predictions for these files:")
     echo(files)
 
+    if format == "vibes":
+        from vibes.trajectory import reader
+
+        assert len(files) == 1, "FIXME: Only 1 vibes trajectory at a time supported."
+
+        file = files[0]
+
+        echo(f"... try to read vibes trajectory from {file}")
+        atoms_list = reader(file)
+    else:
+        echo(f"... parse files using `ase.io.read(..., format={format})`")
+        atoms_list = [read(file, format=format) for file in files]
+
+    atoms = atoms_list[0]
+
     # read first file and create atoms
-    atoms = read(files[0], format=format)
     echo(f"... System: {atoms}")
 
     potential = MLFFPotential.create_from_ckpt_dir(
@@ -47,11 +68,10 @@ def main(
 
     # predict
     n_atoms = len(atoms)
-    n_samples = len(files)
+    n_samples = len(atoms_list)
 
     rows = []
-    for ii, file in enumerate(track(files)):
-        atoms = read(file, format=format)
+    for atoms in track(atoms_list):
 
         predictions, state = calculate(atoms_to_system(atoms), state)
         assert not state.overflow, "FIXME"
