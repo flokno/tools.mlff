@@ -43,7 +43,7 @@ def main(
             atoms = Atoms(**json.loads(ds.atoms_reference))
             nsteps = len(ds.positions[mask])
 
-            _stress.append(ds.stress.data[mask] * atoms.get_volume())
+            _stress.append(ds.stress.data[mask])
             _z.append(np.tile(atoms.numbers, [nsteps, 1]))
             _pbc.append(np.tile(atoms.pbc, [nsteps, 1]))
             _E.append(ds.energy_potential.data[mask])
