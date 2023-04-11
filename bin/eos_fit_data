@@ -46,7 +46,7 @@ def main(
         # plot interpolated pressure
         f_p = si.interp1d(x, p, kind=kind)
         # ax = df.plot(x="volume", y="pressure", style="*")
-        ax.plot(x, y, marker="*", color="k")
+        ax.plot(x, y, marker="*", lw=0, color="k")
         # df.plot(x="volume", y="energy", style="*", ax=ax, color="k")
         tax = ax.twinx()
         tax.plot(x, p, marker=".", color="C3")

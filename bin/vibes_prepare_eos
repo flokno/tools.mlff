@@ -16,7 +16,7 @@ def main(
     file_geometry: Path = "geometry.in",
     file_relaxation: Path = "relaxation.in",
     file_relaxation_template: Path = "relaxation.in.template",
-    dp: float = typer.Option(4, help="max. pressure difference in GPa (+/-)"),
+    dp: float = typer.Option(2, help="max. pressure difference in GPa (+/-)"),
     Np: int = typer.Option(11, help="number of pressures steps"),
     base_folder: str = "eos/p_",
     key_pressure: str = "PRESSURE",
@@ -28,8 +28,8 @@ def main(
     pressures = GPa * np.linspace(-dp, dp, Np)
 
     for pressure in pressures:
-        fol = Path(f"{base_folder}{1+pressure:.3f}")
-        echo(f"... set up {fol} for pressure {pressure/GPa:.3f} GPa")
+        fol = Path(f"{base_folder}{1+pressure:.6f}")
+        echo(f"... set up {fol} for pressure {pressure/GPa:.6f} GPa")
         fol.mkdir(parents=True, exist_ok=True)
         shutil.copy(file, fol / file_geometry)
         infile = template.replace(key_file_geometry, str(file_geometry))

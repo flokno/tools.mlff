@@ -6,6 +6,7 @@ import numpy as np
 from matplotlib import pyplot as plt
 import typer
 from rich import print as echo
+from ase.units import GPa
 
 app = typer.Typer(pretty_exceptions_show_locals=False)
 
@@ -21,7 +22,7 @@ def get_R2(x, y):
 
 
 def get_legend(r2: float, rmse: float) -> str:
-    return [f"R2:   {r2:.3f}\nRMSE: {rmse:.3f}"]
+    return [f"R2:   {r2:.3f}\nRMSE*1e3: {rmse*1e3:.3f}"]
 
 
 @app.command()
@@ -66,7 +67,10 @@ def main(
         r2 = get_R2(x, y)
         rmse = (x - y)[~np.isnan(x)].std()
 
-        echo(f" {label:7s}: R2 = {r2:7.3f} ;  RMSE * 1e3 = {1000*rmse:9.3f}")
+        echo(f" {label:7s}: R2 = {r2:7.3f} ;  RMSE * 1e3  = {1000*rmse:9.3f}")
+
+        if label == "stress":
+            echo(f" {label:7s}: R2 = {r2:7.3f} ;  RMSE (kbar) = {rmse/GPa*10:9.3f}")
 
         ax.scatter(x, y, s=5, marker=".", alpha=0.25)
         ax.set_aspect(1, adjustable="box")
