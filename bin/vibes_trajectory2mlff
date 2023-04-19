@@ -17,6 +17,9 @@ app = typer.Typer(pretty_exceptions_show_locals=False)
 def main(
     files: List[Path],
     outfile: Path = "mlff_data.npz",
+    imin: int = 0,
+    imax: int = -1,
+    stride: int = 1,
     dropna: bool = False,
 ):
     """Convert trajectory files to MLFF input as npz file"""
@@ -61,18 +64,20 @@ def main(
     _velocity = np.concatenate(_velocity)
     _unit_cell = np.concatenate(_unit_cell)
 
+    echo(f"... pick sample {imin} to {imax} with stride {stride}")
+
     # prepate data
     data = {
-        "z": _z,
-        "R": _R,
-        "E": _E,
-        "F": _F,
-        "stress": _stress,
-        "pbc": _pbc,
-        "unit_cell": _unit_cell,
+        "z": _z[imin:imax:stride],
+        "R": _R[imin:imax:stride],
+        "E": _E[imin:imax:stride],
+        "F": _F[imin:imax:stride],
+        "stress": _stress[imin:imax:stride],
+        "pbc": _pbc[imin:imax:stride],
+        "unit_cell": _unit_cell[imin:imax:stride],
     }
 
-    echo(f"... dump {len(_z)} samples to {outfile}")
+    echo(f"... dump {len(data['z'])} samples to {outfile}")
     np.savez(outfile, **data)
 
 

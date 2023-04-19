@@ -75,7 +75,7 @@ def main(
         ax.scatter(x, y, s=5, marker=".", alpha=0.25)
         ax.set_aspect(1, adjustable="box")
         ax.plot(ax.get_xlim(), ax.get_xlim(), color="#313131", lw=1, zorder=-1)
-        ax.legend(get_legend(r2, rmse))
+        ax.legend(get_legend(r2, rmse), loc=1)
 
     if outfile is None:
         outfile = file.stem + ".png"

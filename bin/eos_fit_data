@@ -26,7 +26,7 @@ def main(
     df = pd.read_csv(file, comment="#")
     x = df.volume / df.N
     y = df.energy / df.N
-    p = df.pressure / GPa
+    p = df.pressure  # / GPa
     obj = EquationOfState(volumes=x, energies=y, eos=eos)
     obj.fit()
     args = obj.eos_parameters
@@ -49,10 +49,10 @@ def main(
         ax.plot(x, y, marker="*", lw=0, color="k")
         # df.plot(x="volume", y="energy", style="*", ax=ax, color="k")
         tax = ax.twinx()
-        tax.plot(x, p, marker=".", color="C3")
+        tax.plot(x, p / GPa, marker=".", lw=0, color="C3")
         # df.plot(x="volume", y="pressure", style=".", ax=tax, color="C3")
         _x = np.linspace(x.min(), x.max(), num=1000)
-        tax.plot(_x, f_p(_x), label="interpolation", zorder=0, color="C3")
+        tax.plot(_x, f_p(_x) / GPa, label="interpolation", zorder=0, color="C3")
         tax.axhline(0, c="k", lw=1)
 
         ax.plot(_x, obj.func(_x, *args), color="k")
