@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 
 import pandas as pd
-from ase.eos import EquationOfState
+from scipy.optimize import curve_fit
 from ase.units import GPa
 import numpy as np
 from scipy import interpolate as si
@@ -11,14 +11,33 @@ from matplotlib import pyplot as plt
 from rich import print as echo
 import typer
 
+
+def vinet(V, E0, B0, BP, V0):
+    "Vinet equation from PRB 70, 224107"
+
+    X = (V / V0) ** (1 / 3)
+    eta = 3 / 2 * (BP - 1)
+
+    E = E0 + 2 * B0 * V0 / (BP - 1) ** 2 * (
+        2 - (5 + 3 * BP * (X - 1) - 3 * X) * np.exp(-eta * (X - 1))
+    )
+    return E
+
+
+def vinet_pressure(V, B0, BP, V0):
+    """Eq. (4.1) in P. Vinet et al., Phys Rev B 35, 1945 (1987)."""
+    X = (V / V0) ** (1 / 3)
+    eta = 3 / 2 * (BP - 1)
+    P = 3 * B0 * (1 - X) / X ** 2 * np.exp(eta * (1 - X))
+    return P
+
+
 app = typer.Typer(pretty_exceptions_show_locals=False)
 
 
 @app.command()
 def main(
     file: Path,
-    outfile: Path = None,
-    eos: str = "vinet",
     plot: bool = False,
     kind: str = "quadratic",
 ):
@@ -26,20 +45,35 @@ def main(
     df = pd.read_csv(file, comment="#")
     x = df.volume / df.N
     y = df.energy / df.N
+    y0 = y.min()
     p = df.pressure  # / GPa
-    obj = EquationOfState(volumes=x, energies=y, eos=eos)
-    obj.fit()
-    args = obj.eos_parameters
-    E0, B0, BP, V0 = args
-    kwargs = {"E0": E0, "B0": B0, "BP": BP, "V0": V0}
 
-    echo(f"Results from fitting to {eos} equation of states:")
-    echo(json.dumps(kwargs, indent=1))
+    bounds = ([-1, 0, -10, 0], [1, 5, 10, 100])
+    popt_e, _ = curve_fit(vinet, x, y - y0, bounds=bounds)
 
-    if not outfile:
-        outfile = file.stem + ".json"
-    echo(f"... write  to {outfile}")
-    json.dump(kwargs, open(outfile, "w"), indent=1)
+    bounds = ([0, -10, 0], [5, 10, 100])
+    popt_p, _ = curve_fit(vinet_pressure, x, p, bounds=bounds)
+
+    E0, B0, BP, V0 = popt_e
+    E0 += y0
+    kwargs_e = {"E0": E0, "B0": B0, "BP": BP, "V0": V0}
+
+    echo("Results from fitting *energies* to Vinet equation of states:")
+    echo(json.dumps(kwargs_e, indent=1))
+
+    B0, BP, V0 = popt_p
+    kwargs_p = {"E0": E0, "B0": B0, "BP": BP, "V0": V0}
+
+    echo("Results from fitting *pressures* to Vinet equation of states:")
+    echo(json.dumps(kwargs_p, indent=1))
+
+    outfile = file.stem + "_e.json"
+    echo(f"... write energy fit to {outfile}")
+    json.dump(kwargs_e, open(outfile, "w"), indent=1)
+
+    outfile = file.stem + "_p.json"
+    echo(f"... write pressure fit to {outfile}")
+    json.dump(kwargs_p, open(outfile, "w"), indent=1)
 
     if plot:
         fig, ax = plt.subplots()
@@ -55,9 +89,10 @@ def main(
         tax.plot(_x, f_p(_x) / GPa, label="interpolation", zorder=0, color="C3")
         tax.axhline(0, c="k", lw=1)
 
-        ax.plot(_x, obj.func(_x, *args), color="k")
+        ax.plot(_x, y0 + vinet(_x, *popt_e), color="k")
+        ax.plot(_x, vinet(_x, E0, *popt_p), lw=1, color="teal")
 
-        ax.legend(["Energy", "Fit"])
+        ax.legend(["Calculation", "EOS fit to energy", "EOS fit to pressure"])
         tax.legend(["Pressure", "Fit"])
 
         ax.set_ylabel("Energy (eV)")
