@@ -80,22 +80,29 @@ def main(
         # plot interpolated pressure
         f_p = si.interp1d(x, p, kind=kind)
         # ax = df.plot(x="volume", y="pressure", style="*")
-        ax.plot(x, y, marker="*", lw=0, color="k")
+        _y = 1e3 * (y - y0)
+        ax.plot(x, _y, marker="*", lw=0, color="k")
         # df.plot(x="volume", y="energy", style="*", ax=ax, color="k")
         tax = ax.twinx()
         tax.plot(x, p / GPa, marker=".", lw=0, color="C3")
         # df.plot(x="volume", y="pressure", style=".", ax=tax, color="C3")
         _x = np.linspace(x.min(), x.max(), num=1000)
         tax.plot(_x, f_p(_x) / GPa, label="interpolation", zorder=0, color="C3")
+
+        # plot vinet pressure
+        _y = vinet_pressure(_x, *popt_e[1:]) / GPa
+        tax.plot(_x, _y, color="C0")
+
         tax.axhline(0, c="k", lw=1)
 
-        ax.plot(_x, y0 + vinet(_x, *popt_e), color="k")
-        ax.plot(_x, vinet(_x, E0, *popt_p), lw=1, color="teal")
+        ax.plot(_x, 1e3 * vinet(_x, *popt_e), color="k")
+        ax.plot(_x, 1e3 * vinet(_x, 0, *popt_p), lw=1, color="teal")
 
         ax.legend(["Calculation", "EOS fit to energy", "EOS fit to pressure"])
-        tax.legend(["Pressure", "Fit"])
+        tax.legend(["Pressure", "Fit", "Pressure from energy"])
 
-        ax.set_ylabel("Energy (eV)")
+        ax.set_xlabel(r"Volume per atom (${\rm \AA}^3$)")
+        ax.set_ylabel("Energy per atom (meV)")
         tax.set_ylabel("Pressure (GPa)")
 
         outfile = file.stem + ".pdf"

@@ -24,6 +24,7 @@ def main(
     files: List[Path],
     folder_model: str = "module",
     outfile: str = "predictions.nc",
+    n_replicas: int = 1,
     skin: float = 1.0,
     tdep: bool = False,
     format: str = "aims",
@@ -62,7 +63,7 @@ def main(
     )
 
     calculator, state = supercell.calculator(
-        potential, atoms_to_system(atoms), n_replicas=1, skin=skin
+        potential, atoms_to_system(atoms), n_replicas=n_replicas, skin=skin
     )
     calculate = jit(calculator.calculate)
 
