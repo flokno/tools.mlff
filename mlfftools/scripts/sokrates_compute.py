@@ -27,6 +27,7 @@ def main(
     n_replicas: int = 1,
     skin: float = 1.0,
     tdep: bool = False,
+    float32: bool = False,
     format: str = "aims",
 ):
     """Convert trajectory files to MLFF input as npz file"""
@@ -34,10 +35,16 @@ def main(
     import xarray as xr
     from glp import atoms_to_system
     from glp.calculators import supercell
-    from jax import jit
+    from jax import jit, config
     from mlff.mdx import MLFFPotential
 
-    echo(f"Compute so3krates predictions for these files:")
+    if float32:
+        dtype = jnp.float32
+    else:
+        config.update("jax_enable_x64", True)
+        dtype = jnp.float64
+
+    echo("Compute so3krates predictions for these files:")
     echo(files)
 
     if format == "vibes":
@@ -59,11 +66,14 @@ def main(
     echo(f"... System: {atoms}")
 
     potential = MLFFPotential.create_from_ckpt_dir(
-        folder_model, add_shift=True, dtype=jnp.float64
+        folder_model, add_shift=True, dtype=dtype
     )
 
     calculator, state = supercell.calculator(
-        potential, atoms_to_system(atoms), n_replicas=n_replicas, skin=skin
+        potential,
+        atoms_to_system(atoms, dtype=dtype),
+        n_replicas=n_replicas,
+        skin=skin,
     )
     calculate = jit(calculator.calculate)
 
@@ -74,7 +84,7 @@ def main(
     rows = []
     for atoms in track(atoms_list):
 
-        predictions, state = calculate(atoms_to_system(atoms), state)
+        predictions, state = calculate(atoms_to_system(atoms, dtype=dtype), state)
         assert not state.overflow, "FIXME"
 
         s = predictions["stress"] / atoms.get_volume()
