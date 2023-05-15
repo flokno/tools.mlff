@@ -7,8 +7,6 @@ from matplotlib import pyplot as plt
 import typer
 from rich import print as echo
 from ase.units import GPa
-from typing import List
-import xarray as xr
 
 app = typer.Typer(pretty_exceptions_show_locals=False)
 
@@ -30,29 +28,41 @@ def get_legend(mean: float, r2: float, rmse: float) -> str:
 @app.command()
 def main(
     file: Path,
-    file_training: Path,
-    labels: List[str] = ["energy_potential", "forces", "stress"],
     outfile: Path = None,
+    fix_legacy_volume_scale: bool = False,
     fix_energy_mean: bool = False,
 ):
-    """ML plot for files (training, prediction)"""
-    echo(f"Read predictions from `{file}`, training from `{file_training}`")
+    """Convert trajectory files to MLFF input as npz file"""
+    echo(f"Read data from {file}")
 
-    ds_pred = xr.load_dataset(file)
-    ds_train = xr.load_dataset(file_training)
+    # read data and create dictionaries
+    data = np.load(file, allow_pickle=True)
+    data_inputs = data["inputs"].item()
+    data_target = data["targets"].item()
+    data_predictions = data["predictions"].item()
+
+    keys = ["E", "F"]
+    ncols = 2
+    if "stress" in data_predictions:
+        keys.append("stress")
+        ncols = 3
+
+        if fix_legacy_volume_scale:
+            echo("*** LEGACY: fix the target stress by dividing with volume")
+            volumes = np.linalg.det(data_inputs["unit_cell"])
+            data_target["stress"] /= volumes[:, None, None]
 
     if fix_energy_mean:
         echo("*** mean energies are substracted")
-        ds_train["energy_potential"] -= ds_train["energy_potential"].mean()
-        ds_pred["energy_potential"] -= ds_pred["energy_potential"].mean()
+        data_target["E"] -= data_target["E"].mean()
+        data_predictions["E"] -= data_predictions["E"].mean()
 
-    ncols = len(labels)
     fig, axs = plt.subplots(ncols=ncols, figsize=(4 * ncols, 4))
 
-    for ii, label in enumerate(labels):
+    for ii, label in enumerate(keys):
         ax = axs[ii]
-        x = ds_train[label].data.flatten()
-        y = ds_pred[label].data.flatten()
+        x = data_target[label].flatten()
+        y = data_predictions[label].flatten()
 
         mask = np.isfinite(x)
         x = x[mask]
