@@ -8,13 +8,13 @@ import typer
 from ase.io import read
 from ase.units import GPa
 from rich import print as echo
-from rich.progress import track
 from tdeptools.scripts.tdep_parse_output import (
     dimensions,
     keys,
     write_infiles,
     write_meta,
 )
+from tqdm import tqdm
 
 app = typer.Typer(pretty_exceptions_show_locals=False)
 
@@ -35,7 +35,7 @@ def main(
     import xarray as xr
     from glp import atoms_to_system
     from glp.calculators import supercell
-    from jax import jit, config
+    from jax import config, jit
     from mlff.mdx import MLFFPotential
 
     if float32:
@@ -82,7 +82,7 @@ def main(
     n_samples = len(atoms_list)
 
     rows = []
-    for atoms in track(atoms_list):
+    for atoms in tqdm(atoms_list, ncols=89):
 
         predictions, state = calculate(atoms_to_system(atoms, dtype=dtype), state)
         assert not state.overflow, "FIXME"
