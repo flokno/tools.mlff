@@ -1,6 +1,7 @@
 #! /usr/bin/env python3
 
 from pathlib import Path
+from time import time
 from typing import List
 
 import numpy as np
@@ -28,6 +29,7 @@ def main(
     skin: float = 1.0,
     tdep: bool = False,
     float32: bool = False,
+    benchmark: bool = False,
     format: str = "aims",
 ):
     """Convert trajectory files to MLFF input as npz file"""
@@ -40,9 +42,11 @@ def main(
 
     if float32:
         dtype = jnp.float32
+        echo("... use float32")
     else:
         config.update("jax_enable_x64", True)
         dtype = jnp.float64
+        echo("... use float64")
 
     echo("Compute so3krates predictions for these files:")
     echo(files)
@@ -75,17 +79,27 @@ def main(
         n_replicas=n_replicas,
         skin=skin,
     )
+
+    # jit
+    stime = time()
     calculate = jit(calculator.calculate)
+    predictions, state = calculate(atoms_to_system(atoms, dtype=dtype), state)
+    assert not state.overflow, "FIXME"
+    echo(f"... time to JIT: {time()-stime:.3f}s")
 
     # predict
     n_atoms = len(atoms)
     n_samples = len(atoms_list)
 
     rows = []
+    stime = time()
     for atoms in tqdm(atoms_list, ncols=89):
 
         predictions, state = calculate(atoms_to_system(atoms, dtype=dtype), state)
         assert not state.overflow, "FIXME"
+
+        if benchmark:
+            continue
 
         s = predictions["stress"] / atoms.get_volume()
         if tdep:
@@ -112,6 +126,15 @@ def main(
         }
 
         rows.append(row)
+
+    echo(f"... time to run {len(atoms_list)} steps = {time()-stime:.3f}s")
+    echo(f"--> {(time()-stime)/len(atoms_list):15.6f}  s/iteration")
+    echo(f"--> {1000*(time()-stime)/len(atoms_list):15.6f} ms/iteration")
+    echo(f"--> {len(atoms_list)/(time()-stime):15.6f}  iteration/s")
+
+    if benchmark:
+        echo("... this was a benchmark run, stop.")
+        return
 
     if tdep:
         write_infiles(rows)
