@@ -27,6 +27,7 @@ def main(
     outfile: str = "predictions.nc",
     n_replicas: int = 1,
     skin: float = 1.0,
+    capacity_multiplier: float = 1.25,
     tdep: bool = False,
     float32: bool = False,
     benchmark: bool = False,
@@ -73,11 +74,17 @@ def main(
         folder_model, add_shift=True, dtype=dtype
     )
 
-    calculator, state = supercell.calculator(
-        potential,
-        atoms_to_system(atoms, dtype=dtype),
-        n_replicas=n_replicas,
+    kw = dict(
         skin=skin,
+        n_replicas=n_replicas,
+        capacity_multiplier=capacity_multiplier,
+    )
+
+    echo("... initialize calculator with:")
+    echo(kw)
+
+    calculator, state = supercell.calculator(
+        potential, atoms_to_system(atoms, dtype=dtype), **kw
     )
 
     # jit
@@ -85,7 +92,15 @@ def main(
     calculate = jit(calculator.calculate)
     predictions, state = calculate(atoms_to_system(atoms, dtype=dtype), state)
     assert not state.overflow, "FIXME"
-    echo(f"... time to JIT: {time()-stime:.3f}s")
+    echo(f"...    time to JIT: {time()-stime:.3f}s")
+
+    centers_unique, centers_count = np.unique(state.centers, return_counts=True)
+    centers_count, centers_count_last = centers_count[:-1], centers_count[-1]
+    echo(f"...    no. centers: {len(centers_count)}")
+    echo(f"... min  neighbors: {centers_count.min()}")
+    echo(f"... max  neighbors: {centers_count.max()}")
+    echo(f"... mean neighbors: {centers_count.mean():.1f}")
+    echo(f"... last neighbors: {centers_count_last}")
 
     # predict
     n_atoms = len(atoms)
@@ -130,7 +145,7 @@ def main(
     echo(f"... time to run {len(atoms_list)} steps = {time()-stime:.3f}s")
     echo(f"--> {(time()-stime)/len(atoms_list):15.6f}  s/iteration")
     echo(f"--> {1000*(time()-stime)/len(atoms_list):15.6f} ms/iteration")
-    echo(f"--> {len(atoms_list)/(time()-stime):15.6f}  iteration/s")
+    echo(f"--> {len(atoms_list)/(time()-stime):15.6f}  iterations/s")
 
     if benchmark:
         echo("... this was a benchmark run, stop.")
