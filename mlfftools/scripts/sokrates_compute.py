@@ -43,11 +43,13 @@ def main(
 
     if float32:
         dtype = jnp.float32
-        echo("... use float32")
+        echo("... use float32, do NOT add energy shift")
+        add_shift = False
     else:
         config.update("jax_enable_x64", True)
         dtype = jnp.float64
-        echo("... use float64")
+        echo("... use float64, energy shifts will be added")
+        add_shift = True
 
     echo("Compute so3krates predictions for these files:")
     echo(files)
@@ -69,20 +71,20 @@ def main(
 
     # read first file and create atoms
     echo(f"... System: {atoms}")
+    echo(f"... this is a benchmark run (will not save results): {benchmark}")
 
-    potential = MLFFPotential.create_from_ckpt_dir(
-        folder_model, add_shift=True, dtype=dtype
-    )
+    kw = {"ckpt_dir": folder_model, "add_shift": add_shift, "dtype": dtype}
+    echo("... initialize potential with:")
+    echo(kw)
+    potential = MLFFPotential.create_from_ckpt_dir(**kw)
 
     kw = dict(
         skin=skin,
         n_replicas=n_replicas,
         capacity_multiplier=capacity_multiplier,
     )
-
     echo("... initialize calculator with:")
     echo(kw)
-
     calculator, state = supercell.calculator(
         potential, atoms_to_system(atoms, dtype=dtype), **kw
     )
