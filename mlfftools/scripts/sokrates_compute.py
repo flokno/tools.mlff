@@ -9,12 +9,9 @@ import typer
 from ase.io import read
 from ase.units import GPa
 from rich import print as echo
-from tdeptools.scripts.tdep_parse_output import (
-    dimensions,
-    keys,
-    write_infiles,
-    write_meta,
-)
+from tdeptools.dimensions import dimensions
+from tdeptools.io import write_infiles, write_meta
+from tdeptools.keys import keys
 from tqdm import tqdm
 
 app = typer.Typer(pretty_exceptions_show_locals=False)
