@@ -14,6 +14,18 @@ from tdeptools.io import write_infiles, write_meta
 from tdeptools.keys import keys
 from tqdm import tqdm
 
+
+def get_n_replicas(atoms, potential, skin, nmax=8) -> int:
+    """Find the number of replicas necessary for the calculator"""
+    from glp.periodic import get_heights
+
+    for nn in range(1, nmax):
+        radius = 0.5 * min(get_heights(nn * np.transpose(atoms.cell)))  # glp: transp.
+        if radius > potential.cutoff + skin:
+            return nn
+    raise ValueError(f"n_replicas > {nmax}, CHECK")
+
+
 app = typer.Typer(pretty_exceptions_show_locals=False)
 
 
@@ -22,7 +34,7 @@ def main(
     files: List[Path],
     folder_model: str = "module",
     outfile: str = "predictions.nc",
-    n_replicas: int = 1,
+    n_replicas: int = None,
     skin: float = 1.0,
     capacity_multiplier: float = 1.25,
     tdep: bool = False,
@@ -74,6 +86,11 @@ def main(
     echo("... initialize potential with:")
     echo(kw)
     potential = MLFFPotential.create_from_ckpt_dir(**kw)
+
+    if n_replicas is None:
+        n_replicas = get_n_replicas(atoms, potential, skin)
+        n_atoms = n_replicas ** 3 * len(atoms)
+        echo(f"... use {n_replicas} replicas --> {n_atoms} atoms supercell")
 
     kw = dict(
         skin=skin,
