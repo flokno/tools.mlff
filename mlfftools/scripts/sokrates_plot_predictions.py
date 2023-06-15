@@ -1,34 +1,37 @@
 #! /usr/bin/env python3
 
+import json
 from pathlib import Path
+from typing import List
 
 import numpy as np
-from matplotlib import pyplot as plt
+import pandas as pd
 import typer
-from rich import print as echo
-from ase.units import GPa
-from typing import List
 import xarray as xr
+from matplotlib import pyplot as plt
+from rich import print as echo
 
 app = typer.Typer(pretty_exceptions_show_locals=False)
 
 
 def get_R2(x, y):
-    mask = ~np.isnan(x)
-    x = x[mask]
-    y = y[mask]
-
     std = np.std(x - y)
     r2 = 1 - (std / np.std(x)) ** 2
     return r2
 
 
-def get_legend(x_mean: float, y_mean: float, r2: float, rmse: float) -> str:
+def get_errors(x, y, energy_factor=1000):
+    R2 = get_R2(x, y)
+    mae = energy_factor * abs(x - y).mean()
+    rmse = energy_factor * (x - y).std()
+    return {"R2": R2, "MAE": mae, "RMSE": rmse}
+
+
+def get_legend(errors: dict) -> str:
     rows = [
-        f"Mean x: {x_mean:.3f}",
-        f"Mean y: {y_mean:.3f}",
-        f"R2:   {r2:.3f}",
-        f"RMSE*1e3: {rmse*1e3:.3f}",
+        f"R2:       {errors['R2']:6.3f}",
+        f"MAE*1e3:  {errors['MAE']:6.3f}",
+        f"RMSE*1e3: {errors['RMSE']:6.3f}",
     ]
     return ["\n".join(rows)]
 
@@ -39,6 +42,7 @@ def main(
     file_training: Path,
     labels: List[str] = ["energy_potential", "forces", "stress"],
     outfile: Path = None,
+    outfile_errors: Path = None,
     fix_energy_mean: bool = False,
 ):
     """ML plot for files (training, prediction)"""
@@ -55,6 +59,7 @@ def main(
     ncols = len(labels)
     fig, axs = plt.subplots(ncols=ncols, figsize=(4 * ncols, 4))
 
+    rows = []
     for ii, label in enumerate(labels):
         ax = axs[ii]
         x = ds_train[label].data.flatten()
@@ -64,27 +69,30 @@ def main(
         x = x[mask]
         y = y[mask]
 
-        x_mean = x.mean()
-        y_mean = y.mean()
-        x -= x_mean
-        y -= y_mean
+        echo(f" {label:7s}: mean(x) (train) = {x.mean():.6f}")
+        echo(f" {label:7s}: mean(y) (test)  = {y.mean():.6f}")
 
-        r2 = get_R2(x, y)
-        rmse = (x - y)[~np.isnan(x)].std()
+        x -= x.mean()
+        y -= y.mean()
 
-        echo(f" {label:7s}: x_mean (train) = {x_mean:.6f}")
-        echo(f" {label:7s}: y_mean (test)  = {y_mean:.6f}")
-        echo(f" {label:7s}: R2 = {r2:7.3f} ;  RMSE * 1e3  = {1000*rmse:9.3f}")
-
-        if label == "stress":
-            echo(f" {label:7s}: R2 = {r2:7.3f} ;  RMSE (kbar) = {rmse/GPa*10:9.3f}")
+        errors = get_errors(x, y)
+        echo("Errors:")
+        echo(json.dumps(errors, indent=1))
+        rows.append(errors)
 
         ax.scatter(x, y, s=5, marker=".", alpha=0.25)
         ax.plot(ax.get_xlim(), ax.get_xlim(), color="#313131", lw=1, zorder=-1)
-        kw = {"loc": 0, "markerfirst": True, "frameon": False}
-        ax.legend(get_legend(x_mean, y_mean, r2, rmse), **kw)
+        kw = {
+            "loc": 0,
+            "markerfirst": True,
+            "frameon": False,
+            "prop": {"family": "monospace"},
+        }
+        ax.legend(get_legend(errors), **kw)
         ax.set_title(label)
         ax.set_aspect(1, adjustable="datalim")
+
+    df = pd.DataFrame(rows, index=[l.rstrip("_potential") for l in labels])
 
     fig.suptitle(file.name)
 
@@ -93,6 +101,12 @@ def main(
 
     echo(f"... save plot to {outfile}")
     fig.savefig(outfile)
+
+    if outfile_errors is None:
+        outfile_errors = file.stem + "_errors.csv"
+
+    echo(f"... save errors to {outfile_errors}")
+    df.to_csv(outfile_errors, index_label="target", float_format="%20.15f")
 
 
 if __name__ == "__main__":
