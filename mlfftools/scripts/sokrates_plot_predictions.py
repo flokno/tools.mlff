@@ -23,8 +23,18 @@ def get_R2(x, y):
 def get_errors(x, y, energy_factor=1000):
     R2 = get_R2(x, y)
     mae = energy_factor * abs(x - y).mean()
+    std = energy_factor * x.std()
     rmse = energy_factor * (x - y).std()
-    return {"R2": R2, "MAE": mae, "RMSE": rmse}
+    # nrmse = (x - y).std() / (x.max() - x.min())
+    return {
+        "R2": R2,
+        "MAE": mae,
+        "RMSE": rmse,
+        "STD": std,
+        "MAE/STD": mae / std,
+        "RMSE/STD": rmse / std,
+        # "NRMSE": nrmse,
+    }
 
 
 def get_legend(errors: dict) -> str:
@@ -32,6 +42,7 @@ def get_legend(errors: dict) -> str:
         f"R2:       {errors['R2']:6.3f}",
         f"MAE*1e3:  {errors['MAE']:6.3f}",
         f"RMSE*1e3: {errors['RMSE']:6.3f}",
+        f"RMSE/STD: {errors['RMSE/STD']:6.3f}",
     ]
     return ["\n".join(rows)]
 
