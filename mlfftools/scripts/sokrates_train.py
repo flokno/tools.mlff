@@ -52,9 +52,9 @@ def train_so3krates(
     F: int = 132,
     l_min: int = 1,
     l_max: int = 3,
-    weight_e: float = 0.01,
-    weight_f: float = 1.0,
-    weight_s: float = None,
+    we: float = typer.Option(0.01, "--weight_energy", "-we"),
+    wf: float = typer.Option(1.0, "--weight_forces", "-wf"),
+    ws: float = typer.Option(None, "--weight_stress", "-ws"),
     loss_variance_scaling: bool = False,
     epochs: int = 2000,
     train_split: float = 0.8,
@@ -75,7 +75,7 @@ def train_so3krates(
     wandb_group: str = None,
     wandb_project: str = None,
     outfile_inputs: Path = "inputs.json",
-    force: bool = False,
+    overwrite_module: bool = False,
 ):
     import jax
     import jax.numpy as jnp
@@ -96,7 +96,7 @@ def train_so3krates(
         config.update("jax_enable_x64", True)
 
     # state settings
-    echo('We use the following settings:')
+    echo("We use the following settings:")
     echo(ctx.params)
 
     # prepare stuff
@@ -109,17 +109,14 @@ def train_so3krates(
     if mic:
         inputs += [pn.unit_cell, pn.cell_offset]
 
-    loss_weights = {pn.energy: weight_e, pn.force: weight_f}
-    if weight_s is not None:
-        loss_weights.update({pn.stress: weight_s})
-        targets += [pn.stress]
-    total_loss_weight = sum([x for x in loss_weights.values()])
-    effective_loss_weights = {k: v / total_loss_weight for k, v in loss_weights.items()}
-
-    # data
+    # data and loss
     data = dict(np.load(file_data))
+    loss_weights = {pn.energy: we, pn.force: wf}
 
-    if weight_s is not None:
+    if ws is not None:  # <- we want to train with stress
+        loss_weights.update({pn.stress: ws})
+        targets += [pn.stress]
+
         cell_key = prop_keys[pn.unit_cell]
         stress_key = prop_keys[pn.stress]
 
@@ -129,11 +126,15 @@ def train_so3krates(
         cell_volumes = np.abs(np.linalg.det(cells))  # shape: (B)
         data[stress_key] = stress * cell_volumes[:, None, None]
 
+    total_loss_weight = sum([x for x in loss_weights.values()])
+    effective_loss_weights = {k: v / total_loss_weight for k, v in loss_weights.items()}
+
     # splits:
     n_total = len(data[prop_keys[pn.energy]])
     n_train = int(np.floor(train_split * n_total))
     n_valid = n_total - n_train - 1
 
+    # turn this into a dataset
     data_set = DataSet(data=data, prop_keys=prop_keys)
     data_set.random_split(
         n_train=n_train,
@@ -148,7 +149,7 @@ def train_so3krates(
     if shift_mean:
         data_set.shift_x_by_mean_x(x=pn.energy)
 
-    ckpt_dir.mkdir(exist_ok=force)
+    ckpt_dir.mkdir(exist_ok=overwrite_module)
     # these functions need a str as path
     data_set.save_splits_to_file(ckpt_dir.absolute(), "splits.json")
     data_set.save_scales(ckpt_dir.absolute(), "scales.json")
