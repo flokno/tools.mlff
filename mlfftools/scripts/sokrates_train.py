@@ -2,10 +2,10 @@ import json
 import logging
 from pathlib import Path
 
-import mlff.properties.property_names as pn
 import numpy as np
 import typer
 from mlff.properties import md17_property_keys as prop_keys
+from mlff.properties import property_names as pn
 from rich import print as echo
 
 logging.basicConfig(level=logging.INFO)
@@ -52,19 +52,20 @@ def train_so3krates(
     F: int = 132,
     l_min: int = 1,
     l_max: int = 3,
-    we: float = typer.Option(0.01, "--weight_energy", "-we"),
-    wf: float = typer.Option(1.0, "--weight_forces", "-wf"),
-    ws: float = typer.Option(None, "--weight_stress", "-ws"),
+    we: float = typer.Option(0.01, "--weight-energy", "-we"),
+    wf: float = typer.Option(1.0, "--weight-forces", "-wf"),
+    ws: float = typer.Option(None, "--weight-stress", "-ws"),
     loss_variance_scaling: bool = False,
     epochs: int = 2000,
     train_split: float = 0.8,
+    eval_every_t: int = None,
+    mic: bool = True,
+    float64: bool = False,
     lr: float = 1e-3,
     lr_stop: float = 1e-5,
     lr_decay_exp_transition_steps: int = 100000,
     lr_decay_exp_decay_factor: float = 0.7,
     clip_by_global_norm: float = None,
-    mic: bool = True,
-    float64: bool = False,
     shift_mean: bool = True,
     size_batch: int = None,
     size_batch_training: int = None,
@@ -157,7 +158,7 @@ def train_so3krates(
     d = data_set.get_data_split()
     scales = None
     if loss_variance_scaling:
-        scales = get_scales_with_variance_scaling(data, targets)
+        scales = get_scales_with_variance_scaling(d, targets)
 
     degrees = list(range(l_min, l_max + 1))
     net = So3krates(
@@ -258,7 +259,7 @@ def train_so3krates(
         valid_ds=valid_ds,
         loss_fn=loss_fn,
         ckpt_overwrite=True,
-        eval_every_t=True,
+        eval_every_t=eval_every_t,
         log_every_t=1,
         restart_by_nan=True,
         use_wandb=use_wandb,
