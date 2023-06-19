@@ -73,6 +73,7 @@ def train_so3krates(
     seed_model: int = 0,
     seed_data: int = 0,
     seed_training: int = 0,
+    wandb_name: str = None,
     wandb_group: str = None,
     wandb_project: str = None,
     outfile_inputs: Path = "inputs.json",
@@ -101,10 +102,6 @@ def train_so3krates(
     echo(ctx.params)
 
     # prepare stuff
-    use_wandb = False
-    if wandb_project is not None:
-        use_wandb = True
-
     targets = [pn.energy, pn.force]
     inputs = [pn.atomic_type, pn.atomic_position, pn.idx_i, pn.idx_j, pn.node_mask]
     if mic:
@@ -243,8 +240,14 @@ def train_so3krates(
     h = bundle_dicts([h_net, h_opt, h_coach, h_dataset, h_train_state])
     save_dict(path=ckpt_dir, filename="hyperparameters.json", data=h, exists_ok=True)
 
-    if use_wandb:
-        wandb.init(config=h, project=wandb_project, group=wandb_group)
+    # wandb
+    use_wandb = False
+    if not all(x is None for x in (wandb_name, wandb_group, wandb_project)):
+        kw = {"group": wandb_group, "project": wandb_project, "name": wandb_name}
+        echo("... initialize WanDB with ")
+        echo(kw)
+        wandb.init(config=h, **kw)
+        use_wandb = True
 
     # Save parameters
     echo(f"... write input arguments to {outfile_inputs}")
