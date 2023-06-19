@@ -25,11 +25,13 @@ def get_errors(x, y, energy_factor=1000):
     mae = energy_factor * abs(x - y).mean()
     std = energy_factor * x.std()
     rmse = energy_factor * (x - y).std()
+    me = energy_factor * (x - y).max()
     # nrmse = (x - y).std() / (x.max() - x.min())
     return {
         "R2": R2,
         "MAE": mae,
         "RMSE": rmse,
+        "maxAE": me,
         "STD": std,
         "MAE/STD": mae / std,
         "RMSE/STD": rmse / std,
@@ -47,6 +49,27 @@ def get_legend(errors: dict) -> str:
     return ["\n".join(rows)]
 
 
+def get_xy(
+    ds_train: xr.Dataset, ds_predict: xr.Dataset, label: str, verbose: bool = True
+) -> np.ndarray:
+    """get the data and account for NaN's"""
+    x = ds_train[label].data.flatten()
+    y = ds_predict[label].data.flatten()
+
+    mask = np.isfinite(x)
+    x = x[mask]
+    y = y[mask]
+
+    if verbose:
+        echo(f" {label:7s}: mean(x) (train) = {x.mean():.6f}")
+        echo(f" {label:7s}: mean(y) (test)  = {y.mean():.6f}")
+
+    x -= x.mean()
+    y -= y.mean()
+
+    return x, y
+
+
 @app.command()
 def main(
     file: Path,
@@ -55,6 +78,7 @@ def main(
     outfile: Path = None,
     outfile_errors: Path = None,
     fix_energy_mean: bool = False,
+    key_energy: str = "energy_potential",
 ):
     """ML plot for files (training, prediction)"""
     echo(f"Read predictions from `{file}`, training from `{file_training}`")
@@ -64,28 +88,18 @@ def main(
 
     if fix_energy_mean:
         echo("*** mean energies are substracted")
-        ds_train["energy_potential"] -= ds_train["energy_potential"].mean()
-        ds_pred["energy_potential"] -= ds_pred["energy_potential"].mean()
+        ds_train[key_energy] -= ds_train[key_energy].mean()
+        ds_pred[key_energy] -= ds_pred[key_energy].mean()
 
     ncols = len(labels)
+
     fig, axs = plt.subplots(ncols=ncols, figsize=(4 * ncols, 4))
 
     rows = []
     for ii, label in enumerate(labels):
         ax = axs[ii]
-        x = ds_train[label].data.flatten()
-        y = ds_pred[label].data.flatten()
 
-        mask = np.isfinite(x)
-        x = x[mask]
-        y = y[mask]
-
-        echo(f" {label:7s}: mean(x) (train) = {x.mean():.6f}")
-        echo(f" {label:7s}: mean(y) (test)  = {y.mean():.6f}")
-
-        x -= x.mean()
-        y -= y.mean()
-
+        x, y = get_xy(ds_train=ds_train, ds_predict=ds_pred, label=label)
         errors = get_errors(x, y)
         echo("Errors:")
         echo(json.dumps(errors, indent=1))
