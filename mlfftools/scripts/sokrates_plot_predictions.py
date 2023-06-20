@@ -23,8 +23,8 @@ def main(
     """(legacy) ML plot for files (training, prediction)"""
 
     _main(
-        file=file,
-        file_training=file_training,
+        file_predictions=file,
+        file_reference=file_training,
         labels=labels,
         plot=True,
         outfile_plot=outfile,
