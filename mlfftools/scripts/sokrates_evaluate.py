@@ -94,8 +94,8 @@ def make_plot(data_plot: list, title: str, outfile: str):
 
 @app.command()
 def main(
-    file: Path,
-    file_training: Path,
+    file_predictions: Path,
+    file_reference: Path,
     labels: List[str] = ["energy_potential", "forces", "stress"],
     plot: bool = False,
     outfile_plot: Path = None,
@@ -103,11 +103,11 @@ def main(
     fix_energy_mean: bool = False,
     key_energy: str = "energy_potential",
 ):
-    """Evaluate model errors for data in FILE, FILE_TRAINING, optionally plot"""
-    echo(f"Read predictions from `{file}`, training from `{file_training}`")
+    """Evaluate model errors for data in FILE, FILE_REFERENCE, optionally plot"""
+    echo(f"Read predictions from `{file_predictions}`, training from `{file_reference}`")
 
-    ds_pred = xr.load_dataset(file)
-    ds_train = xr.load_dataset(file_training)
+    ds_pred = xr.load_dataset(file_predictions)
+    ds_train = xr.load_dataset(file_reference)
 
     if fix_energy_mean:
         echo("*** mean energies are substracted")
@@ -128,16 +128,16 @@ def main(
     df = pd.DataFrame(rows, index=[l.rstrip("_potential") for l in labels])
 
     if outfile_errors is None:
-        outfile_errors = file.stem + "_errors.csv"
+        outfile_errors = file_predictions.stem + "_errors.csv"
 
     echo(f"... save errors to {outfile_errors}")
     df.to_csv(outfile_errors, index_label="target", float_format="%20.15f")
 
     if plot:
         if outfile_plot is None:
-            outfile_plot = file.stem + ".png"
+            outfile_plot = file_predictions.stem + ".png"
 
-        make_plot(data_plot, title=file.name, outfile=outfile_plot)
+        make_plot(data_plot, title=file_predictions.name, outfile=outfile_plot)
 
 
 if __name__ == "__main__":
