@@ -40,7 +40,7 @@ def main(
     tdep: bool = False,
     float32: bool = False,
     benchmark: bool = False,
-    format: str = "aims",
+    format: str = None,
 ):
     """Convert trajectory files to MLFF input as npz file"""
     import jax.numpy as jnp
@@ -63,6 +63,15 @@ def main(
     echo("Compute so3krates predictions for these files:")
     echo(files)
 
+    if format is None:
+        if files[0].suffix == ".nc":
+            format = "vibes"
+        elif "geometry.in" in files[0].name:
+            format = "aims"
+        elif "poscar" in files[0].name.lower():
+            format = "vasp"
+        echo(f"... autodetect `{format}` format")
+
     if format == "vibes":
         from vibes.trajectory import reader
 
@@ -70,8 +79,8 @@ def main(
 
         file = files[0]
 
-        echo(f"... try to read vibes trajectory from {file}")
-        atoms_list = reader(file)
+        echo(f"... read vibes trajectory from {file}")
+        atoms_list = reader(file, verbose=False)
     else:
         echo(f"... parse files using `ase.io.read(..., format={format})`")
         atoms_list = [read(file, format=format) for file in files]
