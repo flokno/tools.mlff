@@ -4,9 +4,48 @@ from pathlib import Path
 from typing import List
 
 import typer
+from ase import Atoms
+from ase.calculators.singlepoint import SinglePointCalculator
 from ase.io import read
 from rich import print as echo
 from vibes.trajectory import Trajectory
+
+
+def read_file(file: Path, format: str = None) -> list:
+    """Read FILE and turn into list of Atoms objects"""
+    if format is None:
+        if "aims.out" in str(file):
+            format = "aims-ouput"
+        if file.suffix == ".npz":
+            format = "mlff"
+
+    if format == "mlff":
+        import numpy as np
+        from mlff.properties import property_names as pn
+        from mlff.properties import md17_property_keys as prop_keys
+
+        with np.load(file, allow_pickle=True) as data:
+            data_dict = dict(data)
+
+        Rs = data_dict[prop_keys[pn.atomic_position]]
+        Zs = data_dict[prop_keys[pn.atomic_type]]
+        Cs = data_dict[prop_keys[pn.unit_cell]]
+        PBCs = data_dict[prop_keys[pn.pbc]]
+        Es = data_dict[prop_keys[pn.energy]].squeeze()
+        Fs = data_dict[prop_keys[pn.force]]
+        Ss = data_dict[prop_keys[pn.stress]]
+
+        atoms_list = []
+        for (R, Z, C, PBC, E, F, S) in zip(Rs, Zs, Cs, PBCs, Es, Fs, Ss):
+            atoms = Atoms(positions=R, numbers=Z, cell=C, pbc=PBC)
+            # results = {"energy": E, "forces": F, "stress": S}
+            atoms.calc = SinglePointCalculator(atoms, energy=E, forces=F, stress=S)
+            atoms_list.append(atoms)
+    else:
+        atoms_list = read(file, ":", format=format)
+
+    return atoms_list
+
 
 app = typer.Typer(pretty_exceptions_show_locals=False)
 
@@ -18,7 +57,7 @@ def main(
     supercell: Path = None,
     outfile: Path = "trajectory.nc",
     format_geometry="aims",
-    format_output="aims-output",
+    format_output=None,
     force: bool = False,
 ):
     """Convert calculations in FILES to vibes trajectory"""
@@ -36,7 +75,7 @@ def main(
         echo(f"... parse file {ii+1:3d}: {str(file)}")
 
         try:
-            atoms_list = read(file, ":", format=format_output)
+            atoms_list = read_file(file, format=format_output)
         except (ValueError, IndexError):
             echo(f"*** problem in file {file}, SKIP.")
             continue
