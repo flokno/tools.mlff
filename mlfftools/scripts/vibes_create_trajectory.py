@@ -15,7 +15,7 @@ def read_file(file: Path, format: str = None) -> list:
     """Read FILE and turn into list of Atoms objects"""
     if format is None:
         if "aims.out" in str(file):
-            format = "aims-ouput"
+            format = "aims-output"
         if file.suffix == ".npz":
             format = "mlff"
 
