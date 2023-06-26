@@ -9,6 +9,26 @@ from typing import List
 import typer
 from rich import print as echo
 
+
+def get_tag(file):
+    """extract input parameters"""
+    if file.exists():
+        data_inputs = json.load(open(file))
+
+        _keys = ("r_cut", "L", "we", "wf", "ws", "loss_variance_scaling")
+        (rc, LL, we, wf, ws, vs) = (data_inputs[k] for k in _keys)
+
+        if ws is None:
+            ws = 0
+
+        tag = f"rcut {rc:3.1f} L= {LL:d}, we: {we:.3f}, wf: {wf:.3f}, ws: {ws:.3f}"
+        tag += f", loss_variance_scaling: {vs}"
+    else:
+        tag = str(file.parent)
+
+    return tag
+
+
 app = typer.Typer()
 
 
@@ -26,17 +46,10 @@ def main(
 
     _outfiles = []
     for ii, folder in enumerate(folders):
-        data_inputs = json.load(open(folder / file_inputs))
 
-        _keys = ("r_cut", "L", "we", "wf", "ws", "loss_variance_scaling")
-        (rc, LL, we, wf, ws, vs) = (data_inputs[k] for k in _keys)
+        tag = get_tag(folder / file_inputs)
 
-        if ws is None:
-            ws = 0
-
-        tag = f"rcut {rc:3.1f} L= {LL:d}, we: {we:.3f}, wf: {wf:.3f}, ws: {ws:.3f}"
-        tag += f", loss_variance_scaling: {vs}"
-
+        echo("... Tag:")
         echo(tag)
 
         file = folder / file_plot
