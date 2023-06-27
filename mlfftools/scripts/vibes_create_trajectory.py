@@ -58,6 +58,7 @@ def main(
     outfile: Path = "trajectory.nc",
     format_geometry="aims",
     format_output=None,
+    stride: int = 1,
     force: bool = False,
 ):
     """Convert calculations in FILES to vibes trajectory"""
@@ -89,6 +90,11 @@ def main(
     if n_samples < 1:
         echo("... no data found, abort.")
         return
+
+    if stride > 1:
+        echo(f"... use a stride of {stride}")
+        rows = rows[::stride]
+        echo(f"... reduce no. of samples from {n_samples} to {len(rows)}")
 
     trajectory = Trajectory(rows)
 
