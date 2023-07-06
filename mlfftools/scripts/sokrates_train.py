@@ -41,6 +41,10 @@ def get_scales_with_variance_scaling(data, targets):
 
 app = typer.Typer(pretty_exceptions_show_locals=False)
 
+_we_default = typer.Option(0.01, "--weight-energy", "-we")
+_wf_default = typer.Option(1.0, "--weight-forces", "-wf")
+_ws_default = typer.Option(None, "--weight-stress", "-ws")
+
 
 @app.command()
 def train_so3krates(
@@ -52,9 +56,9 @@ def train_so3krates(
     F: int = 132,
     l_min: int = 1,
     l_max: int = 3,
-    we: float = typer.Option(0.01, "--weight-energy", "-we"),
-    wf: float = typer.Option(1.0, "--weight-forces", "-wf"),
-    ws: float = typer.Option(None, "--weight-stress", "-ws"),
+    we: float = _we_default,
+    wf: float = _wf_default,
+    ws: float = _ws_default,
     loss_variance_scaling: bool = False,
     epochs: int = 2000,
     train_split: float = 0.8,
@@ -101,20 +105,19 @@ def train_so3krates(
     echo("We use the following settings:")
     echo(ctx.params)
 
-    # prepare stuff
-    targets = [pn.energy, pn.force]
+    # prepare inputs and targets
     inputs = [pn.atomic_type, pn.atomic_position, pn.idx_i, pn.idx_j, pn.node_mask]
     if mic:
         inputs += [pn.unit_cell, pn.cell_offset]
 
-    # data and loss
-    data = dict(np.load(file_data))
-    loss_weights = {pn.energy: we, pn.force: wf}
-
+    targets = [pn.energy, pn.force]
     if ws is not None:  # <- we want to train with stress
-        loss_weights.update({pn.stress: ws})
         targets += [pn.stress]
 
+    # data and loss
+    data = dict(np.load(file_data))
+
+    if ws is not None:  # <- we want to train with stress
         cell_key = prop_keys[pn.unit_cell]
         stress_key = prop_keys[pn.stress]
 
@@ -123,9 +126,6 @@ def train_so3krates(
         cells = data[cell_key]  # shape: (B,3,3)
         cell_volumes = np.abs(np.linalg.det(cells))  # shape: (B)
         data[stress_key] = stress * cell_volumes[:, None, None]
-
-    total_loss_weight = sum([x for x in loss_weights.values()])
-    effective_loss_weights = {k: v / total_loss_weight for k, v in loss_weights.items()}
 
     # splits:
     n_total = len(data[prop_keys[pn.energy]])
@@ -147,6 +147,13 @@ def train_so3krates(
     if shift_mean:
         data_set.shift_x_by_mean_x(x=pn.energy)
 
+    # loss weights
+    loss_weights = {pn.energy: we, pn.force: wf}
+    if ws is not None:  # <- we want to train with stress
+        loss_weights.update({pn.stress: ws})
+    total_loss_weight = sum(x for x in loss_weights.values())
+    effective_loss_weights = {k: v / total_loss_weight for k, v in loss_weights.items()}
+
     ckpt_dir.mkdir(exist_ok=overwrite_module)
     # these functions need a str as path
     data_set.save_splits_to_file(ckpt_dir.absolute(), "splits.json")
@@ -162,7 +169,11 @@ def train_so3krates(
         prop_keys=prop_keys,
         F=F,
         n_layer=L,
-        geometry_embed_kwargs={"degrees": degrees, "mic": mic, "r_cut": r_cut},
+        geometry_embed_kwargs={
+            "degrees": degrees,
+            "mic": mic,
+            "r_cut": r_cut,
+        },
         so3krates_layer_kwargs={"degrees": degrees},
     )
 
