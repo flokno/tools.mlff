@@ -201,6 +201,52 @@ def _create_train_state(
     )
 
 
+def _bundle_dicts(
+    net,
+    opt,
+    coach,
+    data_set,
+    h_train_state,
+):
+    from mlff.io import bundle_dicts
+
+    h_net = net.__dict_repr__()
+    h_opt = opt.__dict_repr__()
+    h_coach = coach.__dict_repr__()
+    h_dataset = data_set.__dict_repr__()
+    h = bundle_dicts([h_net, h_opt, h_coach, h_dataset, h_train_state])
+
+    return h
+
+
+def create_train_objects(
+    net,
+    coach,
+    train_ds,
+    data_set,
+    lr,
+    lr_decay_exp_transition_steps,
+    lr_decay_exp_decay_factor,
+    clip_by_global_norm,
+):
+    from mlff.training import Optimizer
+
+    opt = Optimizer(clip_by_global_norm=clip_by_global_norm)
+    train_state, h_train_state = _create_train_state(
+        net,
+        opt,
+        coach,
+        train_ds,
+        lr,
+        lr_decay_exp_transition_steps,
+        lr_decay_exp_decay_factor,
+    )
+
+    h = _bundle_dicts(net, opt, coach, data_set, h_train_state)
+
+    return train_state, h
+
+
 def get_batch_sizes(
     n_train, size_batch=None, size_batch_training=None, size_batch_validation=None
 ):
@@ -212,27 +258,6 @@ def get_batch_sizes(
         size_batch_validation = size_batch
 
     return size_batch, size_batch_training, size_batch_validation
-
-
-def bundle_and_save_dicts(
-    net,
-    opt,
-    coach,
-    data_set,
-    h_train_state,
-    ckpt_dir="module",
-    filename="hyperparameters.json",
-):
-    from mlff.io import bundle_dicts, save_dict
-
-    h_net = net.__dict_repr__()
-    h_opt = opt.__dict_repr__()
-    h_coach = coach.__dict_repr__()
-    h_dataset = data_set.__dict_repr__()
-    h = bundle_dicts([h_net, h_opt, h_coach, h_dataset, h_train_state])
-    save_dict(path=ckpt_dir, filename=filename, data=h, exists_ok=True)
-
-    return h
 
 
 def initialize_wandb(wandb_name, wandb_group, wandb_project, config):
@@ -253,6 +278,18 @@ def save_parameters(params, outfile_inputs="inputs.json"):
     echo(f"... write input arguments to {outfile_inputs}")
     with open(outfile_inputs, "w") as f:
         json.dump(params, f, indent=1)
+
+
+def _get_loss_fn(net, targets, loss_weights, scales, prop_keys):
+    from mlff.training import get_loss_fn
+
+    obs_fn = get_obs_fn(targets, net)
+    return get_loss_fn(
+        obs_fn=obs_fn,
+        weights=loss_weights,
+        scales=scales,
+        prop_keys=prop_keys,
+    )
 
 
 app = typer.Typer(pretty_exceptions_show_locals=False)
@@ -299,8 +336,8 @@ def train_so3krates(
     outfile_inputs: Path = "inputs.json",
     overwrite_module: bool = False,
 ):
-
-    from mlff.training import Coach, Optimizer, get_loss_fn
+    from mlff.io import save_dict
+    from mlff.training import Coach
 
     if float64:
         from jax.config import config
@@ -334,7 +371,6 @@ def train_so3krates(
         ckpt_dir=ckpt_dir,
     )
 
-    # loss weights
     loss_weights = get_loss_weights(
         weight_energy=we, weight_forces=wf, weight_stress=ws
     )
@@ -358,28 +394,20 @@ def train_so3krates(
     )
 
     net = get_net(prop_keys, F, L, l_min, l_max, mic, r_cut)
-    obs_fn = get_obs_fn(targets, net)
-    loss_fn = get_loss_fn(
-        obs_fn=obs_fn,
-        weights=loss_weights,
-        scales=scales,
-        prop_keys=prop_keys,
-    )
 
-    opt = Optimizer(clip_by_global_norm=clip_by_global_norm)
-    train_state, h_train_state = _create_train_state(
+    loss_fn = _get_loss_fn(net, targets, loss_weights, scales, prop_keys)
+
+    train_state, h = create_train_objects(
         net,
-        opt,
         coach,
         train_ds,
+        data_set,
         lr,
         lr_decay_exp_transition_steps,
         lr_decay_exp_decay_factor,
+        clip_by_global_norm,
     )
-
-    h = bundle_and_save_dicts(
-        net, opt, coach, data_set, h_train_state, ckpt_dir=ckpt_dir
-    )
+    save_dict(path=ckpt_dir, filename="hyperparameters.json", data=h, exists_ok=True)
 
     use_wandb = initialize_wandb(wandb_name, wandb_group, wandb_project, config=h)
 
