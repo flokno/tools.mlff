@@ -39,6 +39,222 @@ def get_scales_with_variance_scaling(data, targets):
     return scales
 
 
+def get_inputs(mic=False):
+    inputs = [pn.atomic_type, pn.atomic_position, pn.idx_i, pn.idx_j, pn.node_mask]
+    if mic:
+        inputs += [pn.unit_cell, pn.cell_offset]
+    return inputs
+
+
+def get_targets(stress=False):
+    targets = [pn.energy, pn.force]
+    if stress:
+        targets += [pn.stress]
+    return targets
+
+
+def get_dataset_scales_splits(
+    data,
+    train_split,
+    r_cut,
+    mic,
+    seed_data,
+    inputs,
+    targets,
+    stress=False,
+    shift_mean=False,
+    loss_variance_scaling=False,
+    ckpt_dir="module",
+    file_splits="splits.json",
+    file_scales="scales.json",
+):
+    from mlff.data import DataSet, DataTuple
+
+    if stress:  # <- we want to train with stress
+        cell_key = prop_keys[pn.unit_cell]
+        stress_key = prop_keys[pn.stress]
+
+        _stress = data[stress_key]
+        # re-scale stress with cell volume
+        cells = data[cell_key]  # shape: (B,3,3)
+        cell_volumes = np.abs(np.linalg.det(cells))  # shape: (B)
+        data[stress_key] = _stress * cell_volumes[:, None, None]
+
+    # splits:
+    n_total = len(data[prop_keys[pn.energy]])
+    n_train = int(np.floor(train_split * n_total))
+    n_valid = n_total - n_train - 1
+
+    # turn this into a dataset
+    data_set = DataSet(data=data, prop_keys=prop_keys)
+    data_set.random_split(
+        n_train=n_train,
+        n_valid=n_valid,
+        n_test=0,
+        r_cut=r_cut,
+        training=True,
+        mic=mic,
+        seed=seed_data,
+    )
+
+    if shift_mean:
+        data_set.shift_x_by_mean_x(x=pn.energy)
+
+    data_set.save_splits_to_file(ckpt_dir.absolute(), file_splits)
+    data_set.save_scales(ckpt_dir.absolute(), file_scales)
+
+    d = data_set.get_data_split()
+    scales = None
+    if loss_variance_scaling:
+        scales = get_scales_with_variance_scaling(d, targets)
+
+    data_tuple = DataTuple(inputs=inputs, targets=targets, prop_keys=prop_keys)
+    train_ds = data_tuple(d["train"])
+    valid_ds = data_tuple(d["valid"])
+
+    return data_set, n_train, scales, train_ds, valid_ds
+
+
+def get_loss_weights(
+    weight_energy: float, weight_forces: float, weight_stress: float
+) -> dict:
+    """Gett effective loss weights normalized to 1"""
+
+    _loss_weights = {pn.energy: weight_energy, pn.force: weight_forces}
+    if weight_stress is not None:  # <- we want to train with stress
+        _loss_weights.update({pn.stress: weight_stress})
+    total_loss_weight = sum(x for x in _loss_weights.values())
+    loss_weights = {k: v / total_loss_weight for k, v in _loss_weights.items()}
+
+    return loss_weights
+
+
+def get_net(prop_keys, F, L, l_min, l_max, mic, r_cut):
+    from mlff.nn import So3krates
+
+    degrees = list(range(l_min, l_max + 1))
+    net = So3krates(
+        prop_keys=prop_keys,
+        F=F,
+        n_layer=L,
+        geometry_embed_kwargs={
+            "degrees": degrees,
+            "mic": mic,
+            "r_cut": r_cut,
+        },
+        so3krates_layer_kwargs={"degrees": degrees},
+    )
+    return net
+
+
+def get_obs_fn(targets, net):
+    import jax
+    from mlff.nn.stacknet import (
+        get_energy_force_stress_fn,
+        get_obs_and_force_fn,
+        get_observable_fn,
+    )
+
+    if pn.force in targets:
+        if pn.stress in targets:
+            obs_fn = get_energy_force_stress_fn(net)
+        else:
+            obs_fn = get_obs_and_force_fn(net)
+    else:
+        obs_fn = get_observable_fn(net)
+
+    obs_fn = jax.vmap(obs_fn, in_axes=(None, 0))
+    return obs_fn
+
+
+def _create_train_state(
+    net,
+    opt,
+    coach,
+    train_ds,
+    lr,
+    lr_decay_exp_transition_steps,
+    lr_decay_exp_decay_factor,
+):
+    import jax
+    from jax import numpy as jnp
+    from mlff.training import create_train_state
+
+    lr_decay_exp = {
+        "exponential": {
+            "transition_steps": lr_decay_exp_transition_steps,
+            "decay_factor": lr_decay_exp_decay_factor,
+        }
+    }
+
+    tx = opt.get(learning_rate=lr)
+    inputs = jax.tree_map(lambda x: jnp.array(x[0, ...]), train_ds[0])
+    params = net.init(jax.random.PRNGKey(coach.net_seed), inputs)
+    return create_train_state(
+        net,
+        params,
+        tx,
+        polyak_step_size=None,
+        plateau_lr_decay=None,
+        scheduled_lr_decay=lr_decay_exp,
+        lr_warmup=None,
+    )
+
+
+def get_batch_sizes(
+    n_train, size_batch=None, size_batch_training=None, size_batch_validation=None
+):
+    if size_batch is None:
+        size_batch = autoset_batch_size(n_train)
+    if size_batch_training is None:
+        size_batch_training = size_batch
+    if size_batch_validation is None:
+        size_batch_validation = size_batch
+
+    return size_batch, size_batch_training, size_batch_validation
+
+
+def bundle_and_save_dicts(
+    net,
+    opt,
+    coach,
+    data_set,
+    h_train_state,
+    ckpt_dir="module",
+    filename="hyperparameters.json",
+):
+    from mlff.io import bundle_dicts, save_dict
+
+    h_net = net.__dict_repr__()
+    h_opt = opt.__dict_repr__()
+    h_coach = coach.__dict_repr__()
+    h_dataset = data_set.__dict_repr__()
+    h = bundle_dicts([h_net, h_opt, h_coach, h_dataset, h_train_state])
+    save_dict(path=ckpt_dir, filename=filename, data=h, exists_ok=True)
+
+    return h
+
+
+def initialize_wandb(wandb_name, wandb_group, wandb_project, config):
+    import wandb
+
+    use_wandb = False
+    if not all(x is None for x in (wandb_name, wandb_group, wandb_project)):
+        kw = {"group": wandb_group, "project": wandb_project, "name": wandb_name}
+        echo("... initialize WanDB with ")
+        echo(kw)
+        wandb.init(config=config, **kw)
+        use_wandb = True
+
+    return use_wandb
+
+
+def save_parameters(params, outfile_inputs="inputs.json"):
+    echo(f"... write input arguments to {outfile_inputs}")
+    with open(outfile_inputs, "w") as f:
+        json.dump(params, f, indent=1)
+
+
 app = typer.Typer(pretty_exceptions_show_locals=False)
 
 _we_default = typer.Option(0.01, "--weight-energy", "-we")
@@ -83,18 +299,8 @@ def train_so3krates(
     outfile_inputs: Path = "inputs.json",
     overwrite_module: bool = False,
 ):
-    import jax
-    import jax.numpy as jnp
-    import wandb
-    from mlff.data import DataSet, DataTuple
-    from mlff.io import bundle_dicts, save_dict
-    from mlff.nn import So3krates
-    from mlff.nn.stacknet import (
-        get_energy_force_stress_fn,
-        get_obs_and_force_fn,
-        get_observable_fn,
-    )
-    from mlff.training import Coach, Optimizer, create_train_state, get_loss_fn
+
+    from mlff.training import Coach, Optimizer, get_loss_fn
 
     if float64:
         from jax.config import config
@@ -104,83 +310,24 @@ def train_so3krates(
     # state settings
     echo("We use the following settings:")
     echo(ctx.params)
+    save_parameters(ctx.params, outfile_inputs=outfile_inputs)
 
     # prepare inputs and targets
-    def get_inputs(mic=False):
-        inputs = [pn.atomic_type, pn.atomic_position, pn.idx_i, pn.idx_j, pn.node_mask]
-        if mic:
-            inputs += [pn.unit_cell, pn.cell_offset]
-        return inputs
-
-    def get_targets(stress=False):
-        targets = [pn.energy, pn.force]
-        if stress:
-            targets += [pn.stress]
-        return targets
-
     use_stress = ws is not None
     inputs = get_inputs(mic=mic)
     targets = get_targets(stress=use_stress)
 
-    # data and loss
-    data = dict(np.load(file_data))
-
-    def get_dataset_scales_splits(
-        data,
-        stress=False,
-        shift_mean=False,
-        loss_variance_scaling=False,
-        ckpt_dir="module",
-        file_splits="splits.json",
-        file_scales="scales.json",
-    ):
-        if stress:  # <- we want to train with stress
-            cell_key = prop_keys[pn.unit_cell]
-            stress_key = prop_keys[pn.stress]
-
-            _stress = data[stress_key]
-            # re-scale stress with cell volume
-            cells = data[cell_key]  # shape: (B,3,3)
-            cell_volumes = np.abs(np.linalg.det(cells))  # shape: (B)
-            data[stress_key] = _stress * cell_volumes[:, None, None]
-
-        # splits:
-        n_total = len(data[prop_keys[pn.energy]])
-        n_train = int(np.floor(train_split * n_total))
-        n_valid = n_total - n_train - 1
-
-        # turn this into a dataset
-        data_set = DataSet(data=data, prop_keys=prop_keys)
-        data_set.random_split(
-            n_train=n_train,
-            n_valid=n_valid,
-            n_test=0,
-            r_cut=r_cut,
-            training=True,
-            mic=mic,
-            seed=seed_data,
-        )
-
-        if shift_mean:
-            data_set.shift_x_by_mean_x(x=pn.energy)
-
-        data_set.save_splits_to_file(ckpt_dir.absolute(), file_splits)
-        data_set.save_scales(ckpt_dir.absolute(), file_scales)
-
-        d = data_set.get_data_split()
-        scales = None
-        if loss_variance_scaling:
-            scales = get_scales_with_variance_scaling(d, targets)
-
-        data_tuple = DataTuple(inputs=inputs, targets=targets, prop_keys=prop_keys)
-        train_ds = data_tuple(d["train"])
-        valid_ds = data_tuple(d["valid"])
-
-        return data_set, n_train, scales, train_ds, valid_ds
-
     ckpt_dir.mkdir(exist_ok=overwrite_module)
+
+    data = dict(np.load(file_data))
     data_set, n_train, scales, train_ds, valid_ds = get_dataset_scales_splits(
         data,
+        train_split=train_split,
+        r_cut=r_cut,
+        mic=mic,
+        seed_data=seed_data,
+        inputs=inputs,
+        targets=targets,
         stress=use_stress,
         shift_mean=shift_mean,
         loss_variance_scaling=loss_variance_scaling,
@@ -188,68 +335,9 @@ def train_so3krates(
     )
 
     # loss weights
-    def get_loss_weights(
-        weight_energy: float, weight_forces: float, weight_stress: float
-    ) -> dict:
-        """Gett effective loss weights normalized to 1"""
-
-        _loss_weights = {pn.energy: weight_energy, pn.force: weight_forces}
-        if weight_stress is not None:  # <- we want to train with stress
-            _loss_weights.update({pn.stress: weight_stress})
-        total_loss_weight = sum(x for x in _loss_weights.values())
-        loss_weights = {k: v / total_loss_weight for k, v in _loss_weights.items()}
-
-        return loss_weights
-
     loss_weights = get_loss_weights(
         weight_energy=we, weight_forces=wf, weight_stress=ws
     )
-
-    def get_net(prop_keys, F, L, l_min, l_max, mic, r_cut):
-        degrees = list(range(l_min, l_max + 1))
-        net = So3krates(
-            prop_keys=prop_keys,
-            F=F,
-            n_layer=L,
-            geometry_embed_kwargs={
-                "degrees": degrees,
-                "mic": mic,
-                "r_cut": r_cut,
-            },
-            so3krates_layer_kwargs={"degrees": degrees},
-        )
-        return net
-
-    net = get_net(prop_keys, F, L, l_min, l_max, mic, r_cut)
-
-    def get_obs_fn(targets, net):
-        if pn.force in targets:
-            if pn.stress in targets:
-                obs_fn = get_energy_force_stress_fn(net)
-            else:
-                obs_fn = get_obs_and_force_fn(net)
-        else:
-            obs_fn = get_observable_fn(net)
-
-        obs_fn = jax.vmap(obs_fn, in_axes=(None, 0))
-        return obs_fn
-
-    obs_fn = get_obs_fn(targets, net)
-
-    opt = Optimizer(clip_by_global_norm=clip_by_global_norm)
-
-    # batch sizes
-    def get_batch_sizes(
-        n_train, size_batch=None, size_batch_training=None, size_batch_validation=None
-    ):
-        if size_batch is None:
-            size_batch = autoset_batch_size(n_train)
-        if size_batch_training is None:
-            size_batch_training = size_batch
-        if size_batch_validation is None:
-            size_batch_validation = size_batch
-
-        return size_batch, size_batch_training, size_batch_validation
 
     size_batch, size_batch_training, size_batch_validation = get_batch_sizes(
         n_train, size_batch, size_batch_training, size_batch_validation
@@ -269,6 +357,8 @@ def train_so3krates(
         stop_lr_min=lr_stop,
     )
 
+    net = get_net(prop_keys, F, L, l_min, l_max, mic, r_cut)
+    obs_fn = get_obs_fn(targets, net)
     loss_fn = get_loss_fn(
         obs_fn=obs_fn,
         weights=loss_weights,
@@ -276,36 +366,7 @@ def train_so3krates(
         prop_keys=prop_keys,
     )
 
-    def _create_train_state(
-        net,
-        opt,
-        coach,
-        train_ds,
-        lr,
-        lr_decay_exp_transition_steps,
-        lr_decay_exp_decay_factor,
-    ):
-
-        lr_decay_exp = {
-            "exponential": {
-                "transition_steps": lr_decay_exp_transition_steps,
-                "decay_factor": lr_decay_exp_decay_factor,
-            }
-        }
-
-        tx = opt.get(learning_rate=lr)
-        inputs = jax.tree_map(lambda x: jnp.array(x[0, ...]), train_ds[0])
-        params = net.init(jax.random.PRNGKey(coach.net_seed), inputs)
-        return create_train_state(
-            net,
-            params,
-            tx,
-            polyak_step_size=None,
-            plateau_lr_decay=None,
-            scheduled_lr_decay=lr_decay_exp,
-            lr_warmup=None,
-        )
-
+    opt = Optimizer(clip_by_global_norm=clip_by_global_norm)
     train_state, h_train_state = _create_train_state(
         net,
         opt,
@@ -316,43 +377,13 @@ def train_so3krates(
         lr_decay_exp_decay_factor,
     )
 
-    def bundle_and_save_dicts(
-        net, opt, coach, data_set, ckpt_dir="module", filename="hyperparameters.json"
-    ):
-
-        h_net = net.__dict_repr__()
-        h_opt = opt.__dict_repr__()
-        h_coach = coach.__dict_repr__()
-        h_dataset = data_set.__dict_repr__()
-        h = bundle_dicts([h_net, h_opt, h_coach, h_dataset, h_train_state])
-        save_dict(path=ckpt_dir, filename=filename, data=h, exists_ok=True)
-
-        return h
-
-    h = bundle_and_save_dicts(net, opt, coach, data_set, ckpt_dir=ckpt_dir)
-
-    # wandb
-    def initialize_wandb(wandb_name, wandb_group, wandb_project, config):
-        use_wandb = False
-        if not all(x is None for x in (wandb_name, wandb_group, wandb_project)):
-            kw = {"group": wandb_group, "project": wandb_project, "name": wandb_name}
-            echo("... initialize WanDB with ")
-            echo(kw)
-            wandb.init(config=config, **kw)
-            use_wandb = True
-
-        return use_wandb
+    h = bundle_and_save_dicts(
+        net, opt, coach, data_set, h_train_state, ckpt_dir=ckpt_dir
+    )
 
     use_wandb = initialize_wandb(wandb_name, wandb_group, wandb_project, config=h)
 
-    # Save parameters
-    echo(f"... write input arguments to {outfile_inputs}")
-    with open(outfile_inputs, "w") as f:
-        json.dump(ctx.params, f, indent=1)
-
     echo("... go 🚀")
-
-    asdf
 
     coach.run(
         train_state=train_state,
