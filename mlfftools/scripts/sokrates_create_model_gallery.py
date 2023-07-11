@@ -29,7 +29,7 @@ def get_tag(file):
     return tag
 
 
-app = typer.Typer()
+app = typer.Typer(pretty_exceptions_show_locals=False)
 
 
 @app.command()
@@ -53,6 +53,11 @@ def main(
         echo(tag)
 
         file = folder / file_plot
+
+        if not file.exists():
+            echo(f"... {file} not found, skip")
+            continue
+
         _outfile = f"{outfile_prefix}{ii:03d}.{outfile_suffix}"
 
         cmd = f"convert {file} "
@@ -73,6 +78,10 @@ def main(
         _cmd += f"{_outfile} '-' "
     _cmd += "--landscape "
     _cmd += f"--outfile {outfile}"
+
+    # check if files actually exist
+    for _file in _outfiles:
+        assert Path(_file).exists(), f"{_file} does not exist, arguments are folders!"
 
     echo("... run:")
     echo(_cmd)
