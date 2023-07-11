@@ -1,7 +1,9 @@
 from mlff.nn.stacknet import StackNet
+from mlff.properties import md17_property_keys as prop_keys
 from pathlib import Path
 
 from mlff.properties import property_names as pn
+from mlff.data import DataSet
 import numpy as np
 
 
@@ -27,14 +29,52 @@ def get_scales_with_variance_scaling(data, targets):
         elif t == pn.force:
             force_data_train = data["train"][prop_keys[t]]
             node_msk_train = data["train"][prop_keys[pn.node_mask]]
-            echo(force_data_train.shape)
-            echo(node_msk_train.shape)
             scales[prop_keys[t]] = 1 / np.nanvar(force_data_train[node_msk_train])
     return scales
 
 
+def get_dataset_and_n_train(
+    file_data, r_cut, ws, train_split, mic, shift_mean, seed_data, **null
+):
+    data = dict(np.load(file_data))
+
+    if ws is not None:  # <- we want to train with stress
+        cell_key = prop_keys[pn.unit_cell]
+        stress_key = prop_keys[pn.stress]
+
+        stress = data[stress_key]
+        # re-scale stress with cell volume
+        cells = data[cell_key]  # shape: (B,3,3)
+        cell_volumes = np.abs(np.linalg.det(cells))  # shape: (B)
+        data[stress_key] = stress * cell_volumes[:, None, None]
+
+    # splits:
+    n_total = len(data[prop_keys[pn.energy]])
+    n_train = int(np.floor(train_split * n_total))
+    n_valid = n_total - n_train - 1
+
+    # turn this into a dataset
+    data_set = DataSet(data=data, prop_keys=prop_keys)
+    data_set.random_split(
+        n_train=n_train,
+        n_valid=n_valid,
+        n_test=0,
+        r_cut=r_cut,
+        training=True,
+        mic=mic,
+        seed=seed_data,
+    )
+
+    if shift_mean:
+        data_set.shift_x_by_mean_x(x=pn.energy)
+
+    return n_train, data_set
+
+
 def prepare_run(
     net: StackNet,
+    data_set: DataSet,
+    n_train: int,
     file_data: Path,
     ckpt_dir: Path,
     r_cut: float,
@@ -72,7 +112,7 @@ def prepare_run(
     import jax
     import jax.numpy as jnp
     import wandb
-    from mlff.data import DataSet, DataTuple
+    from mlff.data import DataTuple
     from mlff.io import bundle_dicts, save_dict
     from mlff.nn.stacknet import (
         get_energy_force_stress_fn,
@@ -89,39 +129,6 @@ def prepare_run(
     targets = [pn.energy, pn.force]
     if ws is not None:  # <- we want to train with stress
         targets += [pn.stress]
-
-    # data and loss
-    data = dict(np.load(file_data))
-
-    if ws is not None:  # <- we want to train with stress
-        cell_key = prop_keys[pn.unit_cell]
-        stress_key = prop_keys[pn.stress]
-
-        stress = data[stress_key]
-        # re-scale stress with cell volume
-        cells = data[cell_key]  # shape: (B,3,3)
-        cell_volumes = np.abs(np.linalg.det(cells))  # shape: (B)
-        data[stress_key] = stress * cell_volumes[:, None, None]
-
-    # splits:
-    n_total = len(data[prop_keys[pn.energy]])
-    n_train = int(np.floor(train_split * n_total))
-    n_valid = n_total - n_train - 1
-
-    # turn this into a dataset
-    data_set = DataSet(data=data, prop_keys=prop_keys)
-    data_set.random_split(
-        n_train=n_train,
-        n_valid=n_valid,
-        n_test=0,
-        r_cut=r_cut,
-        training=True,
-        mic=mic,
-        seed=seed_data,
-    )
-
-    if shift_mean:
-        data_set.shift_x_by_mean_x(x=pn.energy)
 
     # loss weights
     loss_weights = {pn.energy: we, pn.force: wf}
@@ -218,8 +225,6 @@ def prepare_run(
     use_wandb = False
     if not all(x is None for x in (wandb_name, wandb_group, wandb_project)):
         kw = {"group": wandb_group, "project": wandb_project, "name": wandb_name}
-        echo("... initialize WanDB with ")
-        echo(kw)
         wandb.init(config=h, **kw)
         use_wandb = True
 
