@@ -4,7 +4,6 @@ from pathlib import Path
 
 import typer
 from mlff.properties import md17_property_keys as prop_keys
-from mlfftools.train import prepare_run, get_dataset_and_n_train
 from rich import print as echo
 
 logging.basicConfig(level=logging.INFO)
@@ -33,7 +32,7 @@ def get_so3krates_net(r_cut, L, F, l_min, l_max, mic):
 def get_so3kratACE_net(
     r_cut, L, F, l_min, l_max, mic, atomic_types, max_body_order, F_body_order
 ):
-    """Prepare So3krates net"""
+    """Prepare So3kratACE net"""
     from mlff.nn import So3kratACE
 
     degrees = list(range(l_min, l_max + 1))
@@ -51,6 +50,14 @@ def get_so3kratACE_net(
     )
 
     return net
+
+
+def log_params(params: dict, outfile_inputs: str):
+    echo("We use the following settings:")
+    echo(params)
+    echo(f"... write input arguments to {outfile_inputs}")
+    with open(outfile_inputs, "w") as f:
+        json.dump(params, f, indent=1)
 
 
 app = typer.Typer(pretty_exceptions_show_locals=False)
@@ -100,6 +107,7 @@ def train_so3krates(
     overwrite_module: bool = False,
     ace: bool = False,
 ):
+    from mlfftools.train import prepare_run, get_dataset_and_n_train
 
     if float64:
         from jax.config import config
@@ -107,11 +115,7 @@ def train_so3krates(
         config.update("jax_enable_x64", True)
 
     # state and save settings
-    echo("We use the following settings:")
-    echo(ctx.params)
-    echo(f"... write input arguments to {outfile_inputs}")
-    with open(outfile_inputs, "w") as f:
-        json.dump(ctx.params, f, indent=1)
+    log_params(ctx.params, outfile_inputs)
 
     # read data, necessary only for ACE
     n_train, data_set = get_dataset_and_n_train(**ctx.params)
