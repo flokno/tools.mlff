@@ -6,6 +6,7 @@ import numpy as np
 import typer
 from mlff.properties import md17_property_keys as prop_keys
 from mlff.properties import property_names as pn
+from mlff.nn.stacknet import StackNet
 from rich import print as echo
 
 logging.basicConfig(level=logging.INFO)
@@ -39,71 +40,73 @@ def get_scales_with_variance_scaling(data, targets):
     return scales
 
 
-app = typer.Typer(pretty_exceptions_show_locals=False)
+def get_so3krates_net(r_cut, L, F, l_min, l_max, mic):
+    """Prepare So3krates net"""
+    from mlff.nn import So3krates
 
-_we_default = typer.Option(0.01, "--weight-energy", "-we")
-_wf_default = typer.Option(1.0, "--weight-forces", "-wf")
-_ws_default = typer.Option(None, "--weight-stress", "-ws")
+    degrees = list(range(l_min, l_max + 1))
+    net = So3krates(
+        prop_keys=prop_keys,
+        F=F,
+        n_layer=L,
+        geometry_embed_kwargs={
+            "degrees": degrees,
+            "mic": mic,
+            "r_cut": r_cut,
+        },
+        so3krates_layer_kwargs={"degrees": degrees},
+    )
+
+    return net
 
 
-@app.command()
-def train_so3krates(
-    ctx: typer.Context,
+def prepare_run(
+    net: StackNet,
     file_data: Path,
-    ckpt_dir: Path = "module",
-    r_cut: float = 5.0,
-    L: int = 3,
-    F: int = 132,
-    l_min: int = 1,
-    l_max: int = 3,
-    we: float = _we_default,
-    wf: float = _wf_default,
-    ws: float = _ws_default,
-    loss_variance_scaling: bool = False,
-    epochs: int = 2000,
-    train_split: float = 0.8,
-    eval_every_t: int = None,
-    mic: bool = True,
-    float64: bool = False,
-    lr: float = 1e-3,
-    lr_stop: float = 1e-5,
-    lr_decay_exp_transition_steps: int = 100000,
-    lr_decay_exp_decay_factor: float = 0.7,
-    clip_by_global_norm: float = None,
-    shift_mean: bool = True,
-    size_batch: int = None,
-    size_batch_training: int = None,
-    size_batch_validation: int = None,
-    seed_model: int = 0,
-    seed_data: int = 0,
-    seed_training: int = 0,
-    wandb_name: str = None,
-    wandb_group: str = None,
-    wandb_project: str = None,
-    outfile_inputs: Path = "inputs.json",
-    overwrite_module: bool = False,
+    ckpt_dir: Path,
+    r_cut: float,
+    we: float,
+    wf: float,
+    ws: float,
+    loss_variance_scaling: bool,
+    epochs: int,
+    train_split: float,
+    eval_every_t: int,
+    mic: bool,
+    lr: float,
+    lr_stop: float,
+    lr_decay_exp_transition_steps: int,
+    lr_decay_exp_decay_factor: float,
+    clip_by_global_norm: float,
+    shift_mean: bool,
+    size_batch: int,
+    size_batch_training: int,
+    size_batch_validation: int,
+    seed_model: int,
+    seed_data: int,
+    seed_training: int,
+    wandb_name: str,
+    wandb_group: str,
+    wandb_project: str,
+    overwrite_module: bool,
+    **null,
 ):
+    """Prepare the run, return coach and run kwargs
+
+    Returns:
+        coach, coach_run_kwargs
+    """
     import jax
     import jax.numpy as jnp
     import wandb
     from mlff.data import DataSet, DataTuple
     from mlff.io import bundle_dicts, save_dict
-    from mlff.nn import So3krates
     from mlff.nn.stacknet import (
         get_energy_force_stress_fn,
         get_obs_and_force_fn,
         get_observable_fn,
     )
     from mlff.training import Coach, Optimizer, create_train_state, get_loss_fn
-
-    if float64:
-        from jax.config import config
-
-        config.update("jax_enable_x64", True)
-
-    # state settings
-    echo("We use the following settings:")
-    echo(ctx.params)
 
     # prepare inputs and targets
     inputs = [pn.atomic_type, pn.atomic_position, pn.idx_i, pn.idx_j, pn.node_mask]
@@ -154,28 +157,15 @@ def train_so3krates(
     total_loss_weight = sum(x for x in loss_weights.values())
     effective_loss_weights = {k: v / total_loss_weight for k, v in loss_weights.items()}
 
-    ckpt_dir.mkdir(exist_ok=overwrite_module)
+    Path(ckpt_dir).mkdir(exist_ok=overwrite_module)
     # these functions need a str as path
-    data_set.save_splits_to_file(ckpt_dir.absolute(), "splits.json")
-    data_set.save_scales(ckpt_dir.absolute(), "scales.json")
+    data_set.save_splits_to_file(Path(ckpt_dir).absolute(), "splits.json")
+    data_set.save_scales(Path(ckpt_dir).absolute(), "scales.json")
 
     d = data_set.get_data_split()
     scales = None
     if loss_variance_scaling:
         scales = get_scales_with_variance_scaling(d, targets)
-
-    degrees = list(range(l_min, l_max + 1))
-    net = So3krates(
-        prop_keys=prop_keys,
-        F=F,
-        n_layer=L,
-        geometry_embed_kwargs={
-            "degrees": degrees,
-            "mic": mic,
-            "r_cut": r_cut,
-        },
-        so3krates_layer_kwargs={"degrees": degrees},
-    )
 
     if pn.force in targets:
         if pn.stress in targets:
@@ -213,8 +203,8 @@ def train_so3krates(
         training_batch_size=size_batch_training,
         validation_batch_size=size_batch_validation,
         loss_weights=effective_loss_weights,
-        ckpt_dir=ckpt_dir.as_posix(),
-        data_path=file_data.as_posix(),
+        ckpt_dir=Path(ckpt_dir).as_posix(),
+        data_path=Path(file_data).as_posix(),
         net_seed=seed_model,
         training_seed=seed_training,
         stop_lr_min=lr_stop,
@@ -260,24 +250,87 @@ def train_so3krates(
         wandb.init(config=h, **kw)
         use_wandb = True
 
-    # Save parameters
+    coach_run_kwargs = {
+        "train_state": train_state,
+        "train_ds": train_ds,
+        "valid_ds": valid_ds,
+        "loss_fn": loss_fn,
+        "ckpt_overwrite": True,
+        "eval_every_t": eval_every_t,
+        "log_every_t": 1,
+        "restart_by_nan": True,
+        "use_wandb": use_wandb,
+    }
+
+    return coach, coach_run_kwargs
+
+
+app = typer.Typer(pretty_exceptions_show_locals=False)
+
+_we_default = typer.Option(0.01, "--weight-energy", "-we")
+_wf_default = typer.Option(1.0, "--weight-forces", "-wf")
+_ws_default = typer.Option(None, "--weight-stress", "-ws")
+
+
+@app.command()
+def train_so3krates(
+    ctx: typer.Context,
+    file_data: Path,
+    ckpt_dir: Path = "module",
+    r_cut: float = 5.0,
+    L: int = 3,
+    F: int = 132,
+    l_min: int = 1,
+    l_max: int = 3,
+    we: float = _we_default,
+    wf: float = _wf_default,
+    ws: float = _ws_default,
+    loss_variance_scaling: bool = False,
+    epochs: int = 2000,
+    train_split: float = 0.8,
+    eval_every_t: int = None,
+    mic: bool = True,
+    float64: bool = False,
+    lr: float = 1e-3,
+    lr_stop: float = 1e-5,
+    lr_decay_exp_transition_steps: int = 100000,
+    lr_decay_exp_decay_factor: float = 0.7,
+    clip_by_global_norm: float = None,
+    shift_mean: bool = True,
+    size_batch: int = None,
+    size_batch_training: int = None,
+    size_batch_validation: int = None,
+    seed_model: int = 0,
+    seed_data: int = 0,
+    seed_training: int = 0,
+    wandb_name: str = None,
+    wandb_group: str = None,
+    wandb_project: str = None,
+    outfile_inputs: Path = "inputs.json",
+    overwrite_module: bool = False,
+):
+
+    if float64:
+        from jax.config import config
+
+        config.update("jax_enable_x64", True)
+
+    # state and save settings
+    echo("We use the following settings:")
+    echo(ctx.params)
+
     echo(f"... write input arguments to {outfile_inputs}")
     with open(outfile_inputs, "w") as f:
         json.dump(ctx.params, f, indent=1)
 
-    echo("... go 🚀")
+    # create the net
+    net = get_so3krates_net(r_cut, L, F, l_min, l_max, mic)
 
-    coach.run(
-        train_state=train_state,
-        train_ds=train_ds,
-        valid_ds=valid_ds,
-        loss_fn=loss_fn,
-        ckpt_overwrite=True,
-        eval_every_t=eval_every_t,
-        log_every_t=1,
-        restart_by_nan=True,
-        use_wandb=use_wandb,
-    )
+    # create run
+    coach, coach_run_kwargs = prepare_run(net, **ctx.params)
+
+    echo("... go 🚀")
+    coach.run(**coach_run_kwargs)
 
 
 if __name__ == "__main__":
