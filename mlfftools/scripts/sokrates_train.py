@@ -124,12 +124,12 @@ def train_so3krates(
     kw = {"r_cut": r_cut, "L": L, "F": F, "l_min": l_min, "l_max": l_max, "mic": mic}
     if ace:
         echo("... let's ACE!")
-        net = get_so3kratACE_net(
-            **kw,
-            atomic_types=data_set.all_atomic_types(),
-            max_body_order=max_body_order,
-            F_body_order=F_body_order,
-        )
+        kw_ace = {
+            "atomic_types": data_set.all_atomic_types(),
+            "max_body_order": max_body_order,
+            "F_body_order": F_body_order,
+        }
+        net = get_so3kratACE_net(**kw, **kw_ace)
     else:
         net = get_so3krates_net(**kw)
 
