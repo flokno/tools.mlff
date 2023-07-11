@@ -3,7 +3,8 @@ import logging
 from pathlib import Path
 
 import typer
-from mlfftools.train import prepare_run
+from mlff.properties import md17_property_keys as prop_keys
+from mlfftools.train import prepare_run, get_dataset_and_n_train
 from rich import print as echo
 
 logging.basicConfig(level=logging.INFO)
@@ -11,7 +12,6 @@ logging.basicConfig(level=logging.INFO)
 
 def get_so3krates_net(r_cut, L, F, l_min, l_max, mic):
     """Prepare So3krates net"""
-    from mlff.properties import md17_property_keys as prop_keys
     from mlff.nn import So3krates
 
     degrees = list(range(l_min, l_max + 1))
@@ -25,6 +25,29 @@ def get_so3krates_net(r_cut, L, F, l_min, l_max, mic):
             "r_cut": r_cut,
         },
         so3krates_layer_kwargs={"degrees": degrees},
+    )
+
+    return net
+
+
+def get_so3kratACE_net(
+    r_cut, L, F, l_min, l_max, mic, atomic_types, max_body_order, F_body_order
+):
+    """Prepare So3krates net"""
+    from mlff.nn import So3kratACE
+
+    degrees = list(range(l_min, l_max + 1))
+    net = So3kratACE(
+        prop_keys=prop_keys,
+        F=F,
+        n_layer=L,
+        atomic_types=atomic_types,
+        geometry_embed_kwargs={"degrees": degrees, "mic": mic, "r_cut": r_cut},
+        so3kratace_layer_kwargs={
+            "degrees": degrees,
+            "max_body_order": max_body_order,
+            "bo_features": F_body_order,
+        },
     )
 
     return net
@@ -47,6 +70,8 @@ def train_so3krates(
     F: int = 132,
     l_min: int = 1,
     l_max: int = 3,
+    max_body_order: int = 2,
+    F_body_order: int = 1,
     we: float = _we_default,
     wf: float = _wf_default,
     ws: float = _ws_default,
@@ -73,6 +98,7 @@ def train_so3krates(
     wandb_project: str = None,
     outfile_inputs: Path = "inputs.json",
     overwrite_module: bool = False,
+    ace: bool = False,
 ):
 
     if float64:
@@ -83,16 +109,28 @@ def train_so3krates(
     # state and save settings
     echo("We use the following settings:")
     echo(ctx.params)
-
     echo(f"... write input arguments to {outfile_inputs}")
     with open(outfile_inputs, "w") as f:
         json.dump(ctx.params, f, indent=1)
 
+    # read data, necessary only for ACE
+    n_train, data_set = get_dataset_and_n_train(**ctx.params)
+
     # create the net
-    net = get_so3krates_net(r_cut, L, F, l_min, l_max, mic)
+    kw = {"r_cut": r_cut, "L": L, "F": F, "l_min": l_min, "l_max": l_max, "mic": mic}
+    if ace:
+        echo("... let's ACE!")
+        net = get_so3kratACE_net(
+            **kw,
+            atomic_types=data_set.all_atomic_types(),
+            max_body_order=max_body_order,
+            F_body_order=F_body_order,
+        )
+    else:
+        net = get_so3krates_net(**kw)
 
     # create run
-    coach, coach_run_kwargs = prepare_run(net, **ctx.params)
+    coach, coach_run_kwargs = prepare_run(net, data_set, n_train, **ctx.params)
 
     echo("... go 🚀")
     coach.run(**coach_run_kwargs)
