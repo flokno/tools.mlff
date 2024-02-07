@@ -57,8 +57,12 @@ def get_xy(
     y = ds_predict[label].data.flatten()
 
     mask = np.isfinite(x)
-    x = x[mask]
-    y = y[mask]
+
+    if sum(mask) > 2:
+        x = x[mask]
+        y = y[mask]
+    else:
+        x = np.zeros_like(y)
 
     if verbose:
         echo(f" {label:7s}: mean(x) (train) = {x.mean():.6f}")
@@ -104,7 +108,9 @@ def main(
     key_energy: str = "energy_potential",
 ):
     """Evaluate model errors for data in FILE, FILE_REFERENCE, optionally plot"""
-    echo(f"Read predictions from `{file_predictions}`, training from `{file_reference}`")
+    echo(
+        f"Read predictions from `{file_predictions}`, training from `{file_reference}`"
+    )
 
     ds_pred = xr.load_dataset(file_predictions)
     ds_train = xr.load_dataset(file_reference)
