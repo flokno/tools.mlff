@@ -27,18 +27,23 @@ def main(
     trajectory = Trajectory.read(file)
 
     # splits:
+    if seed is None:
+        seed = np.random.randint(65536, size=1)[0]
+
+    echo(f"... seed: {seed:8d}")
     np.random.seed(seed)
+
     n_total = len(trajectory)
     n_test = int(np.floor(test_split * n_total))
     n_train = n_total - n_test - 1
 
-    echo(f"... pick {n_train} samples for training")
-    echo(f"... pick  {n_test} samples for testing")
+    echo(f"... pick  {n_train:8d} samples for training")
+    echo(f"... pick  {n_test:8d} samples for testing")
 
     idx_all = np.arange(n_total)
 
-    idx_test = np.random.choice(idx_all, n_test, replace=False)
-    idx_train = np.random.choice(idx_all, n_train, replace=False)
+    idx_train = np.sort(np.random.choice(idx_all, n_train, replace=False))
+    idx_test = np.array([ii for ii in idx_all if ii not in idx_train])
 
     md = trajectory.metadata
     trajectory_test = Trajectory([trajectory[ii] for ii in idx_test], metadata=md)
@@ -50,6 +55,7 @@ def main(
     trajectory_test.write(outfile_test)
 
     data_splits = {
+        "seed": int(seed),
         "idx_test": idx_test.tolist(),
         "idx_train": idx_train.tolist(),
     }
