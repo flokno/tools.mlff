@@ -82,8 +82,13 @@ def main(
         echo(f"... read vibes trajectory from {file}")
         atoms_list = reader(file, verbose=False)
     else:
-        echo(f"... parse files using `ase.io.read(..., format={format})`")
-        atoms_list = [read(file, format=format) for file in files]
+        echo(f"... parse files using `ase.io.read(..., index=':', format={format})`")
+        atoms_list = []
+        for file in files:
+            echo(f"... read {file}")
+            atoms_list.extend(read(file, index=":", format=format))
+
+    echo(f"--> found {len(atoms_list)} steps in total")
 
     atoms = atoms_list[0]
 
@@ -98,7 +103,7 @@ def main(
 
     if n_replicas is None:
         n_replicas = get_n_replicas(atoms, potential, skin)
-        n_atoms = n_replicas ** 3 * len(atoms)
+        n_atoms = n_replicas**3 * len(atoms)
         echo(f"... use {n_replicas} replicas --> {n_atoms} atoms supercell")
 
     kw = dict(
